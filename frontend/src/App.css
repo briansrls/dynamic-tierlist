@@ -1,0 +1,175 @@
+.App {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+  background-color: #36393f; /* Discord-like dark theme background */
+  color: #dcddde; /* Light text color for dark theme */
+}
+
+.App-logo {
+  height: 40vmin;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .App-logo {
+    animation: App-logo-spin infinite 20s linear;
+  }
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+@keyframes App-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.server-list-container {
+  width: 72px; /* Similar to Discord's server bar width */
+  background-color: #202225; /* Darker background for server list */
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto; /* In case of many servers */
+  flex-grow: 1; /* Allows ServerList to take up available space */
+}
+
+.server-icon {
+  width: 50px;
+  height: 50px;
+  background-color: #36393f; /* Default icon background */
+  border-radius: 50%; /* Circular icons */
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  transition: border-radius 0.15s ease-out, background-color 0.15s ease-out;
+  font-size: 24px;
+  font-weight: bold;
+  color: #fff;
+  /* overflow: hidden; -- Stays off for the sliver */
+}
+
+.server-icon-image-wrapper {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%; /* Default circular shape */
+  overflow: hidden;   /* This will clip the image */
+  display: flex;      /* For centering text initials if no image */
+  justify-content: center;
+  align-items: center;
+  transition: border-radius 0.15s ease-out; /* Smooth transition for shape change */
+}
+
+.server-icon:hover .server-icon-image-wrapper,
+.server-icon.selected .server-icon-image-wrapper {
+  border-radius: 35%; /* Squircle shape on hover/selection */
+}
+
+.server-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* border-radius: 50%; -- Removing direct image shaping */
+  /* transition: border-radius 0.15s ease-out; -- Removing direct image shaping */
+}
+
+/* Removing these as we'll use a wrapper strategy 
+.server-icon:hover img,
+.server-icon.selected img {
+  border-radius: 35%; 
+}
+*/
+
+.server-icon:hover {
+  border-radius: 35%; /* Discord's squircle shape on hover */
+  background-color: #7289da; /* Discord purple or any highlight color */
+}
+
+.server-icon.selected {
+  border-radius: 35%;
+  background-color: #7289da; /* Highlight for selected server */
+  position: relative; /* Needed for positioning the pseudo-element */
+}
+
+.server-icon.selected::before {
+  content: '';
+  position: absolute;
+  left: -10px; /* Adjust to control distance from icon and ensure visibility */
+  top: calc(50% - 10px); /* Vertically center: 50% of icon height minus half of sliver height */
+  width: 4px;
+  height: 20px; /* Height of the sliver */
+  background-color: #fff; /* White color for the sliver */
+  border-radius: 0 4px 4px 0; /* Rounded corners on the right side */
+}
+
+.server-icon.selected img {
+  border-radius: 35%; /* Squircle shape for the image itself on parent selection */
+}
+
+/* Example of the side bar for selected, more advanced CSS needed for precise Discord look
+.server-icon.selected::before {
+  content: '';
+  position: absolute;
+  left: -8px; 
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 40%; 
+  background-color: #fff;
+  border-radius: 0 4px 4px 0;
+}
+*/
+
+.main-content-container {
+  flex-grow: 1; /* Takes up the remaining space */
+  padding: 20px;
+  background-color: #36393f; /* Main content area background */
+  overflow-y: auto; /* If content overflows */
+}
+
+/* Remove default CRA styles if they are still there */
+/* .App-logo, .App-header, .App-link can be removed if not used */
+
+.sidebar-container {
+  display: flex;
+  flex-direction: column;
+  width: 72px; /* Same as ServerList width */
+  background-color: #202225; /* Matches ServerList background */
+  /* height: 100vh; Implicit from .App if .App is only child or flex settings align*/
+}
+
+.user-profile-display-container {
+  padding: 8px; /* Some spacing around the profile pic */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  /* background-color: #2f3136; Slightly different bg if needed, or keep same as server list */
+}
+
+.user-profile-pic {
+  width: 50px; /* Consistent with server icon size */
+  height: 50px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid #43b581; /* Example: Discord green status border, optional */
+}
