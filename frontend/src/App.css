@@ -53,44 +53,51 @@
 }
 
 .server-icon {
-  width: 50px;
-  height: 50px;
+  width: 44px; /* Back to 44px */
+  height: 44px; /* Back to 44px */
   background-color: #36393f; /* Default icon background */
-  border-radius: 50%; /* Circular icons */
-  margin-bottom: 8px;
+  border-radius: 25%; /* Default squircle shape (Discord uses something like 15px on 48px, so ~30%. 25-35% is good) */
+  margin-bottom: 10px; /* Increased space between icons */
   display: flex;
   justify-content: center;
   align-items: center;
   cursor: pointer;
-  transition: border-radius 0.15s ease-out, background-color 0.15s ease-out;
+  transition: background-color 0.15s ease-out;
   font-size: 24px;
   font-weight: bold;
   color: #fff;
+  position: relative; /* Ensure this is a positioning context for its ::before */
   /* overflow: hidden; -- Stays off for the sliver */
 }
 
 .server-icon-image-wrapper {
   width: 100%;
   height: 100%;
-  border-radius: 50%; /* Default circular shape */
-  overflow: hidden;   /* This will clip the image */
-  display: flex;      /* For centering text initials if no image */
+  border-radius: 25%; /* Default squircle shape, matching parent */
+  overflow: hidden;   
+  display: flex;      
   justify-content: center;
   align-items: center;
-  transition: border-radius 0.15s ease-out; /* Smooth transition for shape change */
+  /* Styles for when it contains text initials */
+  font-size: 16px; /* Smaller font size for initials */
+  line-height: 1;  /* Helps with vertical centering of text */
+  color: #dcddde; /* Standard Discord text color, or keep #fff from parent */
+  text-align: center; /* Ensure text itself is centered if it wraps (though it shouldn't) */
 }
 
 .server-icon:hover .server-icon-image-wrapper,
 .server-icon.selected .server-icon-image-wrapper {
-  border-radius: 35%; /* Squircle shape on hover/selection */
+  /* border-radius is now static, no change needed on hover/select for shape */
+  /* border-radius: 35%; */ 
 }
 
 .server-icon img {
-  width: 100%;
-  height: 100%;
+  width: 100%; 
+  height: 100%; 
   object-fit: cover;
-  /* border-radius: 50%; -- Removing direct image shaping */
-  /* transition: border-radius 0.15s ease-out; -- Removing direct image shaping */
+  display: block; 
+  /* transform: translateY(1px); --- Reverting this change */
+  /* border-radius will be controlled by .server-icon-image-wrapper via overflow:hidden */
 }
 
 /* Removing these as we'll use a wrapper strategy 
@@ -100,30 +107,54 @@
 }
 */
 
+/* --- SERVER ICON SLIVER STYLES --- */
+
+/* Default state for ALL server icon slivers */
+.server-icon::before {
+  content: '';
+  position: absolute;
+  left: -13px; /* Moved further left */
+  width: 3px; 
+  border-radius: 0 3px 3px 0;
+  display: block; 
+  background-color: #fff; 
+  height: 0; 
+  top: 50%;  
+  opacity: 0; 
+  z-index: 1; /* Add z-index */
+  transition: opacity 0.1s ease-out, height 0.15s ease-out, top 0.15s ease-out;
+}
+
+/* Parent icon hover effect (restored) */
 .server-icon:hover {
-  border-radius: 35%; /* Discord's squircle shape on hover */
-  background-color: #7289da; /* Discord purple or any highlight color */
+  /* border-radius: 35%; -- Shape is static now */
+  background-color: #7289da; 
+}
+
+/* Sliver for a HOVERED (but not selected) server icon */
+.server-icon:hover:not(.selected)::before {
+  height: 16px; /* For 44px icon */
+  top: calc(50% - 8px); /* Center the 16px sliver */
+  opacity: 1; 
+  transition: opacity 0.1s ease-out, height 0.15s ease-out, top 0.15s ease-out;
+}
+
+/* Sliver for the CURRENTLY SELECTED server icon */
+.server-icon.selected::before {
+  height: 36px; /* Slightly taller for selected state */
+  top: calc(50% - 18px); /* Center the 36px sliver */
+  opacity: 1; 
+  transition: opacity 0.1s ease-out, height 0.15s ease-out, top 0.15s ease-out;
 }
 
 .server-icon.selected {
-  border-radius: 35%;
+  /* border-radius: 35%; -- Shape is static now */
   background-color: #7289da; /* Highlight for selected server */
-  position: relative; /* Needed for positioning the pseudo-element */
-}
-
-.server-icon.selected::before {
-  content: '';
-  position: absolute;
-  left: -10px; /* Adjust to control distance from icon and ensure visibility */
-  top: calc(50% - 10px); /* Vertically center: 50% of icon height minus half of sliver height */
-  width: 4px;
-  height: 20px; /* Height of the sliver */
-  background-color: #fff; /* White color for the sliver */
-  border-radius: 0 4px 4px 0; /* Rounded corners on the right side */
+  /* position: relative; --- This is now on the base .server-icon rule */
 }
 
 .server-icon.selected img {
-  border-radius: 35%; /* Squircle shape for the image itself on parent selection */
+  /* border-radius: 35%; -- Shape is static on wrapper */
 }
 
 /* Example of the side bar for selected, more advanced CSS needed for precise Discord look
@@ -194,12 +225,18 @@
   box-sizing: border-box; 
   border: 2px solid #4f545c; /* Initial border same color as background */
   transition: background-color 0.15s ease-out, border-color 0.15s ease-out, transform 0.1s ease-out; /* Added transform */
+  pointer-events: auto; /* Ensure the button itself is clickable */
 }
 
 .login-icon-button svg {
   fill: #B9BBBE; 
   width: 28px; 
   height: 28px;
+  user-select: none; /* Prevents text selection which can lead to drag initiation */
+  -webkit-user-drag: none; /* For Safari/Chrome */
+  -moz-user-select: none; /* For Firefox */
+  -ms-user-select: none; /* For IE/Edge */
+  pointer-events: none; /* For SVGs, this can help if direct drag on SVG is an issue, but be careful it doesn't block clicks on parent */
 }
 
 .login-icon-button:hover {
@@ -262,6 +299,17 @@
   white-space: nowrap;
   box-shadow: 0 2px 10px rgba(0,0,0,0.2);
   z-index: 10; /* Ensure it's above other elements */
+  opacity: 0; /* Start transparent for animation */
+  transform: translateY(10px) scale(0.95); /* Start slightly down and scaled for animation */
+  animation: popup-appear 0.15s ease-out forwards;
+}
+
+/* We need a keyframe animation to ensure the final state is kept */
+@keyframes popup-appear {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .popup-logout-button:hover {
@@ -277,4 +325,35 @@
   font-size: 20px;
   color: #fff;
   background-color: #36393f;
+}
+
+/* Prevent dragging on key UI elements */
+.server-icon img,
+.user-profile-pic,
+.login-icon-button svg {
+  user-select: none; /* Prevents text selection which can lead to drag initiation */
+  -webkit-user-drag: none; /* For Safari/Chrome */
+  -moz-user-select: none; /* For Firefox */
+  -ms-user-select: none; /* For IE/Edge */
+  pointer-events: none; /* For SVGs, this can help if direct drag on SVG is an issue, but be careful it doesn't block clicks on parent */
+}
+
+.auth-callback-page {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh; /* Full viewport height */
+  background-color: #36393f; /* Discord-like dark background */
+}
+
+.discord-spinner-svg {
+  animation: spin 1.5s linear infinite;
+  transform-origin: center; /* Explicitly set transform origin */
+  overflow: visible !important; /* DIAGNOSTIC: See if content is being clipped */
+  /* Optional: add a subtle pulse or other effects */
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }

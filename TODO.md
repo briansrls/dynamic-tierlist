@@ -37,6 +37,7 @@ This document outlines the next major steps for developing the Discord Social Cr
 *   [ ] Refine UI/UX for a more polished and intuitive experience.
 *   [ ] Implement loading states and error handling for API calls.
 *   [ ] Consider state management solutions (e.g., Redux Toolkit, Zustand, Context API improvements) as the application grows.
+*   [ ] Implement drag-and-drop reordering for the server list (e.g., using react-beautiful-dnd or Dnd Kit).
 
 ## Future Considerations / Advanced Features
 

@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     DISCORD_AUTH_URL: str = "https://discord.com/api/oauth2/authorize"
     DISCORD_TOKEN_URL: str = "https://discord.com/api/oauth2/token"
     DISCORD_USER_INFO_URL: str = "https://discord.com/api/users/@me"
+    DISCORD_USER_GUILDS_URL: str = "https://discord.com/api/users/@me/guilds"
 
     # For session management (example, you might use a more robust secret)
     SECRET_KEY: str = "a_very_secret_key_for_jwt_or_sessions"

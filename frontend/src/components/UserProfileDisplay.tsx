@@ -11,7 +11,6 @@ const UserProfileDisplay: React.FC<UserProfileProps> = ({ username, profilePicUr
     <div
       className="user-profile-display-container"
       onClick={onClick}
-      title={username}
       style={{ cursor: onClick ? 'pointer' : 'default' }}
     >
       <img src={profilePicUrl} alt={`${username}'s profile`} className="user-profile-pic" />

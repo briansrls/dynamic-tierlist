@@ -40,11 +40,20 @@ class UserSocialCreditTarget(BaseModel):
     target_user_id: str
     scores_history: List[ScoreEntry] = []
 
+# Simplified server info to be stored with the user or fetched
+class UserServerInfo(BaseModel):
+    id: str # Discord Server ID
+    name: str
+    icon: Optional[str] = None # Icon hash
+    # owner: bool - can get this from Discord API if needed
+    # permissions: str - can get this from Discord API if needed
+
 class User(BaseModel):
     user_id: str
     username: str
     profile_picture_url: Optional[str] = None
     social_credits_given: List[UserSocialCreditTarget] = []
+    servers: List[UserServerInfo] = [] # Add a list to store user's servers
 
 class Server(BaseModel):
     server_id: str
@@ -190,6 +199,19 @@ async def auth_discord_callback(code: str, state: Optional[str] = None):
             user_info_response.raise_for_status()
             user_info = user_info_response.json()
 
+            # 3. Fetch user's guilds (servers)
+            user_guilds_response = await client.get(settings.DISCORD_USER_GUILDS_URL, headers=user_info_headers)
+            user_guilds_response.raise_for_status()
+            guilds_info = user_guilds_response.json()
+            
+            user_servers_list: List[UserServerInfo] = []
+            for guild in guilds_info:
+                user_servers_list.append(UserServerInfo(
+                    id=guild["id"],
+                    name=guild["name"],
+                    icon=guild.get("icon")
+                ))
+
             discord_id = user_info.get("id")
             discord_username = user_info.get("username")
             discord_avatar = user_info.get("avatar")
@@ -203,16 +225,17 @@ async def auth_discord_callback(code: str, state: Optional[str] = None):
             
             if discord_id not in db_users:
                 app_user = User(
-                    user_id=discord_id, # Using Discord ID as our app's user_id for simplicity
+                    user_id=discord_id, 
                     username=discord_username,
                     profile_picture_url=profile_pic_url,
-                    social_credits_given=[] # Initialize empty list
+                    social_credits_given=[],
+                    servers=user_servers_list # Store fetched servers
                 )
                 db_users[discord_id] = app_user
             else:
-                # Update existing user details if necessary
                 db_users[discord_id].username = discord_username
                 db_users[discord_id].profile_picture_url = profile_pic_url
+                db_users[discord_id].servers = user_servers_list # Update servers
             
             # Create JWT for our application session
             access_token_expires = timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -265,6 +288,16 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
     Get the details of the currently authenticated user.
     """
     return current_user
+
+@app.get("/users/me/tracked-servers", response_model=List[UserServerInfo])
+async def read_user_tracked_servers(current_user: User = Depends(get_current_user)):
+    """
+    Get the list of servers the authenticated user has (initially fetched from Discord).
+    In the future, this could be a list of servers the user explicitly tracks in this app.
+    """
+    # For now, it returns all servers associated with the user from the initial fetch.
+    # Later, you might have a separate 'tracked_servers' list if users pick from their Discord servers.
+    return current_user.servers
 
 @app.post("/users/{acting_user_id}/credit/{target_user_id}", response_model=UserSocialCreditTarget)
 async def give_social_credit(
