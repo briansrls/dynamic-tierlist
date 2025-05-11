@@ -159,17 +159,122 @@
 }
 
 .user-profile-display-container {
-  padding: 8px; /* Some spacing around the profile pic */
+  /* padding: 8px; --- We will control size by width/height and let content center */
   display: flex;
   justify-content: center;
   align-items: center;
-  /* background-color: #2f3136; Slightly different bg if needed, or keep same as server list */
+  box-sizing: border-box;
+  width: 60px; /* Target size for the clickable area */
+  height: 60px;
+  border-radius: 50%; /* Keep container circular for visual consistency before pic border */
+  /* background-color: #2f3136; */
 }
 
 .user-profile-pic {
-  width: 50px; /* Consistent with server icon size */
+  width: 50px; 
   height: 50px;
   border-radius: 50%;
   object-fit: cover;
-  border: 2px solid #43b581; /* Example: Discord green status border, optional */
+  border: 2px solid #43b581; 
+  box-sizing: border-box; 
+}
+
+/* Remove or repurpose old .login-button styles if it was text-based */
+/* .login-button { ... } */
+
+.login-icon-button {
+  width: 60px; /* Match .user-profile-display-container size */
+  height: 60px;
+  border-radius: 50%;
+  background-color: #4f545c; 
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  box-sizing: border-box; 
+  border: 2px solid #4f545c; /* Initial border same color as background */
+  transition: background-color 0.15s ease-out, border-color 0.15s ease-out, transform 0.1s ease-out; /* Added transform */
+}
+
+.login-icon-button svg {
+  fill: #B9BBBE; 
+  width: 28px; 
+  height: 28px;
+}
+
+.login-icon-button:hover {
+  background-color: #5865F2; 
+  border-color: #5865F2; 
+  transform: scale(1.05); /* Subtle lift/enlarge */
+}
+
+.login-icon-button:hover svg {
+  fill: #FFFFFF; /* White icon on hover */
+}
+
+.logout-button {
+  background-color: #f04747; /* Discord red */
+  color: white;
+  border: none;
+  padding: 8px 10px;
+  margin: 10px auto 5px auto; /* Top margin, centered, some bottom margin */
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: bold;
+  display: block;
+  width: calc(100% - 20px);
+  box-sizing: border-box;
+}
+
+.logout-button:hover {
+  background-color: #d84040; /* Darker red */
+}
+
+.sidebar-bottom {
+  margin-top: auto; /* Pushes this section to the bottom of the flex container */
+  padding-bottom: 10px; /* Some spacing at the very bottom */
+  width: 100%; /* Ensure it takes the full width of the sidebar */
+  position: relative; /* For positioning the logout prompt if needed, or use a child wrapper */
+}
+
+.user-actions-area {
+  position: relative; /* Parent for absolute positioning of the popup */
+  display: flex;
+  flex-direction: column; /* Stack profile pic and potential popup */
+  align-items: center;
+}
+
+.popup-logout-button {
+  position: absolute;
+  bottom: 65px; /* Position above the UserProfileDisplay (approx 50px height + 8px padding + spacing) */
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: #36393f; /* Dark background, similar to Discord popups */
+  color: #f04747; /* Red text for logout */
+  border: 1px solid #202225; /* Border to distinguish from sidebar */
+  padding: 8px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  width: auto; /* Fit content */
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+  z-index: 10; /* Ensure it's above other elements */
+}
+
+.popup-logout-button:hover {
+  background-color: #40444B;
+  color: #ff5f5f;
+}
+
+.loading-app {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  font-size: 20px;
+  color: #fff;
+  background-color: #36393f;
 }

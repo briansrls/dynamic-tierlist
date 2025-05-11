@@ -1,9 +1,33 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.responses import RedirectResponse
+from fastapi.security import OAuth2PasswordBearer
+from fastapi.middleware.cors import CORSMiddleware # Import CORS middleware
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 from datetime import datetime, timezone
 
+from core.config import settings
+import httpx
+import urllib.parse
+from jose import JWTError, jwt
+from datetime import timedelta # For token expiry
+
 app = FastAPI()
+
+# --- CORS Middleware --- 
+# This should be among the first middleware added if you have multiple.
+origins = [
+    "http://localhost:3000", # Your frontend origin
+    # Add other origins if needed, e.g., your production frontend URL
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True, # Allows cookies to be included in requests (if you use them later)
+    allow_methods=["*"],    # Allows all methods (GET, POST, PUT, etc.)
+    allow_headers=["*"],    # Allows all headers
+)
 
 # --- Pydantic Models ---
 
@@ -93,6 +117,154 @@ initialize_sample_data() # Initialize with sample data when the app starts
 @app.get("/")
 async def read_root():
     return {"message": "Hello from the Social Credit Backend"}
+
+# --- OAuth Endpoints ---
+
+@app.get("/auth/discord/login")
+async def auth_discord_login():
+    """
+    Redirects the user to Discord's OAuth2 authorization page.
+    """
+    scopes = ["identify", "email", "guilds"] # Common scopes
+    params = {
+        "client_id": settings.DISCORD_CLIENT_ID,
+        "redirect_uri": settings.DISCORD_REDIRECT_URI,
+        "response_type": "code",
+        "scope": ' '.join(scopes),
+        # "state": "your_random_state_string"  # Optional: for CSRF protection, recommended for production
+    }
+    discord_auth_url_with_params = f"{settings.DISCORD_AUTH_URL}?{urllib.parse.urlencode(params)}"
+    return RedirectResponse(url=discord_auth_url_with_params)
+
+# OAuth2 scheme for Bearer token dependency
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token") # tokenUrl is not used directly by us here, but required
+
+# Helper function to create JWT access token
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return encoded_jwt
+
+@app.get("/auth/discord/callback")
+async def auth_discord_callback(code: str, state: Optional[str] = None):
+    """
+    Handles the callback from Discord after user authorization.
+    Exchanges the authorization code for an access token and fetches user info.
+    """
+    token_data = {
+        "client_id": settings.DISCORD_CLIENT_ID,
+        "client_secret": settings.DISCORD_CLIENT_SECRET,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": settings.DISCORD_REDIRECT_URI,
+        # "scope": "identify email guilds" # Not strictly needed for token exchange but good to remember
+    }
+
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded'
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            # 1. Exchange code for access token
+            token_response = await client.post(settings.DISCORD_TOKEN_URL, data=token_data, headers=headers)
+            token_response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+            token_payload = token_response.json()
+            access_token = token_payload.get("access_token")
+            # refresh_token = token_payload.get("refresh_token") # Store this securely if needed for long-lived access
+            # expires_in = token_payload.get("expires_in")
+
+            if not access_token:
+                raise HTTPException(status_code=400, detail="Could not obtain access token from Discord")
+
+            # 2. Fetch user information from Discord using the access token
+            user_info_headers = {
+                "Authorization": f"Bearer {access_token}"
+            }
+            user_info_response = await client.get(settings.DISCORD_USER_INFO_URL, headers=user_info_headers)
+            user_info_response.raise_for_status()
+            user_info = user_info_response.json()
+
+            discord_id = user_info.get("id")
+            discord_username = user_info.get("username")
+            discord_avatar = user_info.get("avatar")
+            discord_email = user_info.get("email") # If email scope was granted and present
+
+            if not discord_id or not discord_username:
+                raise HTTPException(status_code=500, detail="Could not retrieve essential user info from Discord.")
+
+            # Upsert user in our mock database
+            profile_pic_url = f"https://cdn.discordapp.com/avatars/{discord_id}/{discord_avatar}.png" if discord_avatar else None
+            
+            if discord_id not in db_users:
+                app_user = User(
+                    user_id=discord_id, # Using Discord ID as our app's user_id for simplicity
+                    username=discord_username,
+                    profile_picture_url=profile_pic_url,
+                    social_credits_given=[] # Initialize empty list
+                )
+                db_users[discord_id] = app_user
+            else:
+                # Update existing user details if necessary
+                db_users[discord_id].username = discord_username
+                db_users[discord_id].profile_picture_url = profile_pic_url
+            
+            # Create JWT for our application session
+            access_token_expires = timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+            app_access_token = create_access_token(
+                data={"sub": discord_id, "username": discord_username}, 
+                expires_delta=access_token_expires
+            )
+            
+            # Redirect to frontend with the token
+            frontend_redirect_url = f"http://localhost:3000/auth/callback?token={app_access_token}"
+            # In a production app, you might get the frontend URL from settings as well.
+            return RedirectResponse(url=frontend_redirect_url)
+
+        except httpx.HTTPStatusError as e:
+            # Log the error details from Discord if possible
+            error_detail = e.response.json() if e.response else str(e)
+            print(f"Discord API Error: {error_detail}") # Log to server console
+            raise HTTPException(status_code=e.response.status_code, detail=f"Error communicating with Discord: {error_detail}")
+        except Exception as e:
+            print(f"Generic error in Discord callback: {e}") # Log to server console
+            raise HTTPException(status_code=500, detail=f"An unexpected error occurred during Discord authentication: {str(e)}")
+
+# Helper function to get current user from token
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        user_id: str = payload.get("sub")
+        username: str = payload.get("username") # We can also get username if stored
+        if user_id is None or username is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    user = db_users.get(user_id)
+    if user is None:
+        # This case should ideally not happen if JWTs are issued only for existing users
+        # Or, it could mean the user was deleted after the token was issued.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return user
+
+# --- User Endpoints ---
+@app.get("/users/me", response_model=User)
+async def read_users_me(current_user: User = Depends(get_current_user)):
+    """
+    Get the details of the currently authenticated user.
+    """
+    return current_user
 
 @app.post("/users/{acting_user_id}/credit/{target_user_id}", response_model=UserSocialCreditTarget)
 async def give_social_credit(
