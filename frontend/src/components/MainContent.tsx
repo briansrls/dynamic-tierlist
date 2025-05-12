@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ScoreGraph, { ScoreEntry } from './ScoreGraph';
 import UserSearch, { UserProfile } from './UserSearch';
-import { AppUser } from '../App';
+import { AppUser, ServerData, GLOBAL_VIEW_SERVER_ID } from '../App';
 import AddRatingModal from './AddRatingModal';
 
 // Interface for the "wide" data format for the multi-line graph
@@ -10,12 +10,22 @@ export interface MultiLineGraphDataPoint {
   [userSpecificDataKey: string]: number | null; // e.g., "USERID_score": 50 or null
 }
 
+// Frontend equivalent of GuildMemberStatus from backend
+// interface GuildMemberStatus {
+//   server_id: string;
+//   user_id: string;
+//   is_member: boolean;
+//   username_in_server?: string | null;
+// }
+
 interface MainContentProps {
   selectedServerId: string | null;
   currentUser: AppUser | null;
+  userServers: ServerData[];
+  globalViewServerId: string;
 }
 
-const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser }) => {
+const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser, userServers, globalViewServerId }) => {
   const [trackedUsers, setTrackedUsers] = useState<UserProfile[]>([]);
   const [isRatingModalOpen, setIsRatingModalOpen] = useState(false);
   const [userToRate, setUserToRate] = useState<UserProfile | null>(null);
@@ -29,14 +39,6 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
   // Add state for overall min/max scores for the multi-line graph
   const [overallMinScore, setOverallMinScore] = useState<number>(0);
   const [overallMaxScore, setOverallMaxScore] = useState<number>(100); // Default sensible range
-
-  const [isGlobalView, setIsGlobalView] = useState(true); // Default to global view
-
-  // Helper to generate distinct colors for graph lines
-  const generateColor = (index: number): string => {
-    const colors = ["#8884d8", "#82ca9d", "#ffc658", "#ff7300", "#387908", "#00C49F", "#FFBB28", "#FF8042"];
-    return colors[index % colors.length];
-  };
 
   const processAndSetMultiLineGraphData = useCallback((users: UserProfile[], allScores: Map<string, ScoreEntry[]>) => {
     if (users.length === 0) {
@@ -215,6 +217,7 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
     // The existing useEffect for [currentUser, trackedUsers, fetchAllTrackedUserScores] handles this.
   }, [trackedUsers, currentUser]);
 
+  // useEffect for clearing state on logout (this one is fine)
   useEffect(() => {
     if (!currentUser) {
       setTrackedUsers([]);
@@ -225,33 +228,34 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
       setLineConfigs([]);
       setIsLoadingMultiLineGraph(false);
       setMultiLineGraphError(null);
-      setOverallMinScore(0); // Reset overall scores
+      setOverallMinScore(0);
       setOverallMaxScore(100);
-    } else {
-      // Fetch data for all currently tracked users when currentUser is available or trackedUsers change
-      if (trackedUsers.length > 0) {
-        fetchAllTrackedUserScores(trackedUsers);
-      }
     }
-  }, [currentUser, trackedUsers, fetchAllTrackedUserScores]); // Effect depends on these
+    // No longer need to fetch all scores here directly based on currentUser alone,
+    // the next effect handles it based on trackedUsers and currentUser.
+  }, [currentUser]);
 
-  // Effect to update global graph when trackedUsers change or view toggles
+  // Main effect to fetch data for all tracked users.
+  // This will run when currentUser or trackedUsers changes.
+  // selectedServerId is NOT a dependency here because we are not filtering the *data* by server,
+  // only changing the graph title contextually.
   useEffect(() => {
-    if (currentUser && trackedUsers.length > 0) { // Only fetch if there are users to track
+    if (currentUser && trackedUsers.length > 0) {
+      console.log("MainContent: Fetching scores for all tracked users. Selected server (for title):", selectedServerId);
       fetchAllTrackedUserScores(trackedUsers);
-    } else {
-      setMultiLineGraphData([]); // Clear graph if no users or no current user
+    } else if (currentUser && trackedUsers.length === 0) {
+      setMultiLineGraphData([]);
       setLineConfigs([]);
+      setMultiLineGraphError(null);
+      setIsLoadingMultiLineGraph(false);
     }
-    // Removed isGlobalView from deps, as global graph is always the target now
-  }, [trackedUsers, currentUser, fetchAllTrackedUserScores]);
+  }, [currentUser, trackedUsers, fetchAllTrackedUserScores]); // Removed selectedServerId, globalViewServerId, filterAndFetchScoresForServer
 
   const handleTrackUser = (userToTrack: UserProfile) => {
     setTrackedUsers(prevTrackedUsers => {
       if (prevTrackedUsers.find(user => user.id === userToTrack.id)) {
         return prevTrackedUsers;
       }
-      // No immediate fetch here; useEffect above will catch change to trackedUsers
       return [...prevTrackedUsers, userToTrack];
     });
   };
@@ -313,19 +317,29 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
     }
   };
 
+  // Helper to generate distinct colors for graph lines
+  const generateColor = (index: number): string => {
+    const colors = ["#8884d8", "#82ca9d", "#ffc658", "#ff7300", "#387908", "#00C49F", "#FFBB28", "#FF8042"];
+    return colors[index % colors.length];
+  };
+
   return (
     <div className="main-content-container">
       <UserSearch selectedServerId={selectedServerId} onTrackUser={handleTrackUser} />
 
-      {/* Graph Area - Always shows multi-line graph of tracked users */}
       <div className="graph-display-area">
-        {isLoadingMultiLineGraph && <div className="graph-loading">Loading scores for tracked users...</div>}
+        {isLoadingMultiLineGraph && <div className="graph-loading">Loading scores...</div>}
         {multiLineGraphError && <div className="graph-error">Error: {multiLineGraphError}</div>}
         {!isLoadingMultiLineGraph && !multiLineGraphError && (
           <ScoreGraph
             data={multiLineGraphData}
-            graphTitle="Tracked Users Score Overview"
-            lineConfigs={lineConfigs} // Pass line configurations
+            graphTitle={
+              selectedServerId === globalViewServerId
+                ? "All Tracked Users - Score Overview"
+                // Ensure userServers is available and s.id is checked
+                : `Scores (Perspective: ${userServers.find(s => s && s.id === selectedServerId)?.name || "Selected Server"})`
+            }
+            lineConfigs={lineConfigs}
             overallMinScore={overallMinScore}
             overallMaxScore={overallMaxScore}
           />

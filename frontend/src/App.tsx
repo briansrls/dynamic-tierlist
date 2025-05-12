@@ -7,7 +7,7 @@ import UserProfileDisplay from './components/UserProfileDisplay';
 import AuthCallbackPage from './components/AuthCallbackPage';
 
 // Define ServerData interface near AppUser or in a dedicated types file
-interface ServerData {
+export interface ServerData {
   id: string;
   name: string;
   icon: string | null;
@@ -20,11 +20,13 @@ export interface AppUser {
   user_id: string; // From Discord
 }
 
+export const GLOBAL_VIEW_SERVER_ID = "global_view";
+
 // Main layout component
 const MainLayout: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
-  const [userServers, setUserServers] = useState<ServerData[]>([]); // Re-enable this state
-  const [selectedServerId, setSelectedServerId] = useState<string | null>(null); // New state for selected server
+  const [userServers, setUserServers] = useState<ServerData[]>([]);
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(GLOBAL_VIEW_SERVER_ID); // Default to global
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [isLoadingServers, setIsLoadingServers] = useState(false); // Re-enable this state
   const [serverError, setServerError] = useState<string | null>(null); // Re-enable this state
@@ -45,10 +47,12 @@ const MainLayout: React.FC = () => {
       });
       if (response.ok) {
         const data: ServerData[] = await response.json();
-        setUserServers(data);
-        if (data.length > 0 && !selectedServerId) {
-          setSelectedServerId(data[0].id);
-        }
+        const globalViewServer: ServerData = {
+          id: GLOBAL_VIEW_SERVER_ID,
+          name: "All Tracked Users",
+          icon: "global_icon_placeholder",
+        };
+        setUserServers([globalViewServer, ...data]);
       } else {
         const errorText = await response.text();
         console.error("Failed to fetch servers:", response.status, errorText);
@@ -61,7 +65,7 @@ const MainLayout: React.FC = () => {
       setUserServers([]);
     }
     setIsLoadingServers(false);
-  }, []); // Removed selectedServerId from dependencies. Auto-selection logic might need refinement.
+  }, []); // Removed selectedServerId from dependencies, was causing re-fetches
 
   const fetchCurrentUser = useCallback(async (token: string) => {
     console.log("fetchCurrentUser called with token:", token);
@@ -88,7 +92,9 @@ const MainLayout: React.FC = () => {
         setCurrentUser(null);
         setUserServers([]); // Clear servers on auth failure
         setServerError(null); // Clear server errors
-        setSelectedServerId(null); // Clear selected server
+        setSelectedServerId(GLOBAL_VIEW_SERVER_ID); // Reset to global on auth failure
+        setShowLogoutPrompt(false);
+        setIsLoggingOut(false);
       }
     } catch (error) {
       console.error("Error fetching current user:", error);
@@ -96,7 +102,9 @@ const MainLayout: React.FC = () => {
       setCurrentUser(null);
       setUserServers([]); // Clear servers on error
       setServerError(null); // Clear server errors
-      setSelectedServerId(null); // Clear selected server
+      setSelectedServerId(GLOBAL_VIEW_SERVER_ID); // Reset to global on error
+      setShowLogoutPrompt(false);
+      setIsLoggingOut(false);
     }
     setIsLoadingAuth(false);
   }, [fetchUserServers]);
@@ -109,7 +117,7 @@ const MainLayout: React.FC = () => {
       setIsLoadingAuth(false); // No token, not loading auth
       setUserServers([]); // Ensure servers are clear if no token from the start
       setIsLoadingServers(false); // Not loading servers either
-      setSelectedServerId(null);
+      setSelectedServerId(GLOBAL_VIEW_SERVER_ID);
     }
 
     // Start timer for minimum loading display time - THIS RUNS ONCE ON MOUNT
@@ -170,19 +178,16 @@ const MainLayout: React.FC = () => {
   };
 
   const handleLogout = () => {
-    setIsLoggingOut(true); // Start fade-out
-
-    // Delay actual logout logic to allow animation to play
+    setIsLoggingOut(true);
     setTimeout(() => {
       localStorage.removeItem('app_access_token');
-      setCurrentUser(null); // This will trigger re-render to login screen
+      setCurrentUser(null);
       setUserServers([]);
       setServerError(null);
-      setSelectedServerId(null);
+      setSelectedServerId(GLOBAL_VIEW_SERVER_ID); // Reset to global on logout
       setShowLogoutPrompt(false);
-      setIsLoggingOut(false); // Reset fade-out state
-      // Tracked users in MainContent will clear via its own useEffect watching currentUser
-    }, 500); // Match this duration to your CSS fade-out animation time
+      setIsLoggingOut(false);
+    }, 500);
   };
 
   // 1. Initial Loading Phase (Auth check or minimum display time not passed)
@@ -262,7 +267,12 @@ const MainLayout: React.FC = () => {
           </div>
         </div>
       </div>
-      <MainContent selectedServerId={selectedServerId} currentUser={currentUser} />
+      <MainContent
+        selectedServerId={selectedServerId}
+        currentUser={currentUser}
+        userServers={userServers}
+        globalViewServerId={GLOBAL_VIEW_SERVER_ID}
+      />
     </div>
   );
 };

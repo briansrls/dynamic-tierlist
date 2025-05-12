@@ -94,7 +94,9 @@ const ServerList: React.FC<ServerListProps> = ({ servers, isLoading, error, sele
           title={server.name} // Re-added title for usability, can be removed if strictly no tooltips
         >
           <div className="server-icon-image-wrapper">
-            {getDiscordIconUrl(server.id, server.icon) ? (
+            {server.icon === "global_icon_placeholder" ? (
+              <span className="global-icon-placeholder" role="img" aria-label="Global View">🌍</span>
+            ) : getDiscordIconUrl(server.id, server.icon) ? (
               <img src={getDiscordIconUrl(server.id, server.icon)} alt={server.name} />
             ) : (
               getServerInitials(server.name) // Use the new helper

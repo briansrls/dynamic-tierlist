@@ -82,6 +82,13 @@ class DiscordUserProfile(BaseModel):
     accent_color: Optional[int] = None
     public_flags: Optional[int] = None
 
+class GuildMemberStatus(BaseModel):
+    server_id: str
+    user_id: str
+    is_member: bool
+    username_in_server: Optional[str] = None # Could be nickname or global name
+    # We could also include the full member object if needed later
+
 # --- In-Memory Database ---
 # For now, we'll use dictionaries to simulate MongoDB collections.
 # In a real application, these would be replaced with MongoDB operations.
@@ -531,8 +538,75 @@ async def get_discord_user_profile(
             print(f"Generic error fetching user {user_id_to_lookup}: {e}") # Log to server console
             raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
-# Placeholder for future database connection and models
-# from pymongo import MongoClient
+@app.get("/discord/servers/{server_id}/members/{user_id_to_check}/is-member", response_model=GuildMemberStatus)
+async def check_guild_membership(
+    server_id: str,
+    user_id_to_check: str,
+    current_user: User = Depends(get_current_user) # Authenticated app user
+):
+    """
+    Checks if a given user ID is a member of a given server ID (guild ID).
+    Uses the application's bot token for the Discord API call.
+    """
+    if not settings.DISCORD_BOT_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Application bot token is not configured on the server for this operation."
+        )
+
+    discord_api_url = f"https://discord.com/api/v10/guilds/{server_id}/members/{user_id_to_check}"
+    headers = {
+        "Authorization": f"Bot {settings.DISCORD_BOT_TOKEN}"
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            print(f"BACKEND: Calling Discord API: {discord_api_url} for user {user_id_to_check} in server {server_id}") # LOG 1
+            response = await client.get(discord_api_url, headers=headers)
+            print(f"BACKEND: Discord API response status: {response.status_code} for user {user_id_to_check} in server {server_id}") # LOG 2
+            
+            if response.status_code == 200:
+                member_data = response.json()
+                username = member_data.get("user", {}).get("username", "Unknown")
+                nickname = member_data.get("nick")
+                print(f"BACKEND: User {user_id_to_check} IS member of {server_id}. Nick: {nickname}, User: {username}. Returning is_member=True.") # LOG 3
+                return GuildMemberStatus(
+                    server_id=server_id,
+                    user_id=user_id_to_check,
+                    is_member=True,
+                    username_in_server=nickname or username
+                )
+            elif response.status_code == 404: # User is not a member of the guild
+                print(f"BACKEND: User {user_id_to_check} NOT member of {server_id} (Discord 404). Returning is_member=False.") # LOG 4
+                return GuildMemberStatus(
+                    server_id=server_id,
+                    user_id=user_id_to_check,
+                    is_member=False
+                )
+            else:
+                error_text = "Unknown error structure"
+                try:
+                    error_text = response.text
+                except Exception:
+                    pass # Keep default error_text
+                print(f"BACKEND: Discord API returned other status {response.status_code} for user {user_id_to_check}. Content: {error_text}") # LOG 5
+                response.raise_for_status() 
+                # This part below is typically unreachable if raise_for_status() works as expected for client errors
+                return GuildMemberStatus(server_id=server_id, user_id=user_id_to_check, is_member=False, username_in_server="Discord API Error") 
+
+        except httpx.HTTPStatusError as e:
+            error_detail = "Unknown error structure"
+            try:
+                error_detail = e.response.text
+            except Exception:
+                pass # Keep default error_detail
+            print(f"BACKEND: HTTPStatusError checking membership for user {user_id_to_check} in server {server_id}: Status {e.response.status_code}, Detail: {error_detail}. Returning is_member=False.") # LOG 6
+            if e.response.status_code == 403:
+                 return GuildMemberStatus(server_id=server_id, user_id=user_id_to_check, is_member=False, username_in_server="Access Denied")
+            return GuildMemberStatus(server_id=server_id, user_id=user_id_to_check, is_member=False, username_in_server="Error Checking Status")
+        except Exception as e:
+            print(f"BACKEND: Generic error checking membership for user {user_id_to_check} in server {server_id}: {str(e)}. Returning is_member=False.") # LOG 7
+            return GuildMemberStatus(server_id=server_id, user_id=user_id_to_check, is_member=False, username_in_server="Generic Error")
 
 # MONGO_URI = "mongodb://localhost:27017/"
 # client = MongoClient(MONGO_URI)

@@ -758,3 +758,8 @@
   margin-top: 15px;
   font-size: 0.9em;
 }
+
+.global-icon-placeholder {
+  font-size: 28px; /* Adjust size as needed */
+  line-height: 1; /* Ensure it centers well */
+}
