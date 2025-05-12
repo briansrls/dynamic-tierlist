@@ -3,4 +3,5 @@ uvicorn[standard]
 pymongo
 httpx
 pydantic-settings
-python-jose[cryptography] 
+python-jose[cryptography]
+motor

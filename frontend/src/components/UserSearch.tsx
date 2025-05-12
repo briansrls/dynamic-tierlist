@@ -17,9 +17,10 @@ interface UserSearchProps {
   selectedServerId: string | null; // This is no longer strictly needed for ID lookup but kept for now if component structure is reused.
   // Could be removed if this component is solely for ID lookup.
   onTrackUser: (user: UserProfile) => void;
+  currentServerContext: string | null;  // Add this prop to indicate which server we're searching in
 }
 
-const UserSearch: React.FC<UserSearchProps> = ({ selectedServerId, onTrackUser }) => {
+const UserSearch: React.FC<UserSearchProps> = ({ selectedServerId, onTrackUser, currentServerContext }) => {
   const [userIdInput, setUserIdInput] = useState(''); // Changed from searchTerm
   const [foundUser, setFoundUser] = useState<UserProfile | null>(null); // Changed from results array
   const [isLoading, setIsLoading] = useState(false);

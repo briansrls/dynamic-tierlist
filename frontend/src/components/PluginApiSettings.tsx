@@ -4,15 +4,8 @@ import ConfirmationModal from './ConfirmationModal'; // Import ConfirmationModal
 import '../App.css'; // For styles
 
 interface PluginApiKeyStatus {
-  has_key: boolean;
+  has_api_key: boolean;
   generated_at?: string; // ISO datetime string
-  key_preview?: string;
-}
-
-interface GeneratedApiKeyResponse {
-  message: string;
-  plugin_api_key: string;
-  generated_at: string;
 }
 
 interface PluginApiSettingsProps {
@@ -98,10 +91,19 @@ const PluginApiSettings: React.FC<PluginApiSettingsProps> = ({ currentUser }) =>
         const errData = await response.json().catch(() => ({ detail: "Failed to generate API key" }));
         throw new Error(errData.detail || `Error: ${response.status}`);
       }
-      const data: GeneratedApiKeyResponse = await response.json();
-      setNewlyGeneratedKey(data.plugin_api_key);
-      setFeedbackMessage({ type: 'success', text: data.message });
-      fetchApiKeyStatus();
+      const data: { api_key: string, generated_at: string } = await response.json();
+      console.log("Frontend: Received data from /users/me/plugin-api-key:", data); // LOG 1: Full response data
+
+      if (data && data.api_key) {
+        setNewlyGeneratedKey(data.api_key);
+        console.log("Frontend: Set newlyGeneratedKey to:", data.api_key); // LOG 2: Key being set
+        setFeedbackMessage({ type: 'success', text: "API Key generated successfully!" });
+        console.log("Frontend: Set feedbackMessage to success."); // LOG 3: Feedback message
+      } else {
+        console.error("Frontend: API key missing in response data:", data);
+        throw new Error("API key was not found in the server response.");
+      }
+      fetchApiKeyStatus(); // Refresh status (key preview, etc.)
     } catch (err: any) {
       setFeedbackMessage({ type: 'error', text: err.message });
     } finally {
@@ -113,7 +115,7 @@ const PluginApiSettings: React.FC<PluginApiSettingsProps> = ({ currentUser }) =>
     openConfirmationModal(
       doGenerateKey,
       "Generating a new API key will invalidate any existing key. Are you sure you want to continue?",
-      apiKeyStatus?.has_key ? "Regenerate" : "Generate"
+      apiKeyStatus?.has_api_key ? "Regenerate" : "Generate"
     );
   };
 
@@ -178,10 +180,9 @@ const PluginApiSettings: React.FC<PluginApiSettingsProps> = ({ currentUser }) =>
       )}
       {apiKeyStatus && (
         <div className="api-key-status">
-          {apiKeyStatus.has_key ? (
+          {apiKeyStatus.has_api_key ? (
             <>
               <p>API Key Generated: {new Date(apiKeyStatus.generated_at!).toLocaleString()}</p>
-              <p>Key Preview: <code>{apiKeyStatus.key_preview}</code></p>
               <button onClick={handleRevokeKey} className="button-danger" disabled={isLoading}>
                 Revoke Key
               </button>
@@ -189,8 +190,8 @@ const PluginApiSettings: React.FC<PluginApiSettingsProps> = ({ currentUser }) =>
           ) : (
             <p>No Plugin API Key has been generated yet.</p>
           )}
-          <button onClick={handleGenerateKey} className="button-primary" disabled={isLoading} style={{ marginLeft: apiKeyStatus.has_key ? '10px' : '0' }}>
-            {apiKeyStatus.has_key ? "Regenerate Key" : "Generate Key"}
+          <button onClick={handleGenerateKey} className="button-primary" disabled={isLoading} style={{ marginLeft: apiKeyStatus.has_api_key ? '10px' : '0' }}>
+            {apiKeyStatus.has_api_key ? "Regenerate Key" : "Generate Key"}
           </button>
         </div>
       )}
@@ -212,7 +213,7 @@ const PluginApiSettings: React.FC<PluginApiSettingsProps> = ({ currentUser }) =>
         isOpen={isConfirmModalOpen}
         onClose={() => { setIsConfirmModalOpen(false); setConfirmAction(null); }}
         onConfirm={handleRunConfirmedAction}
-        title={apiKeyStatus?.has_key && confirmAction === doGenerateKey ? "Regenerate API Key?" : "Confirm Action"} // Dynamic title
+        title={apiKeyStatus?.has_api_key && confirmAction === doGenerateKey ? "Regenerate API Key?" : "Confirm Action"} // Dynamic title
         message={confirmMessage}
         confirmButtonText={confirmButtonText}
       />

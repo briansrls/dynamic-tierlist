@@ -25,6 +25,10 @@ interface MainContentProps {
   currentUser: AppUser | null;
   userServers: ServerData[];
   globalViewServerId: string;
+  trackedUsers: UserProfile[];
+  isLoadingTrackedUsers: boolean;
+  trackedUsersError: string | null;
+  refreshTrackedUsers: () => Promise<void>;
 }
 
 // Helper to generate distinct colors for graph lines (defined at module scope or outside component)
@@ -33,8 +37,7 @@ const generateColor = (index: number): string => {
   return colors[index % colors.length];
 };
 
-const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser, userServers, globalViewServerId }) => {
-  const [trackedUsers, setTrackedUsers] = useState<UserProfile[]>([]);
+const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser, userServers, globalViewServerId, trackedUsers, isLoadingTrackedUsers, trackedUsersError, refreshTrackedUsers }) => {
   const [isRatingModalOpen, setIsRatingModalOpen] = useState(false);
   const [userToRate, setUserToRate] = useState<UserProfile | null>(null);
   const [ratingError, setRatingError] = useState<string | null>(null);
@@ -52,8 +55,7 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
   // State for Untrack Confirmation Modal
   const [isUntrackConfirmModalOpen, setIsUntrackConfirmModalOpen] = useState(false);
   const [userToUntrack, setUserToUntrack] = useState<UserProfile | null>(null);
-
-  const [isInitialTrackedUsersLoaded, setIsInitialTrackedUsersLoaded] = useState(false); // New state
+  const [isSearchVisible, setIsSearchVisible] = useState(false); // State for search visibility
 
   const processAndSetMultiLineGraphData = useCallback((usersForGraph: UserProfile[], allScores: Map<string, ScoreEntry[]>) => {
     if (usersForGraph.length === 0) {
@@ -177,74 +179,13 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
     setIsLoadingMultiLineGraph(false);
   }, [currentUser, processAndSetMultiLineGraphData]);
 
-  // Effect for initializing trackedUsers from localStorage on load/login
+  // Main data fetching and processing logic
   useEffect(() => {
-    console.log("MAINCONTENT: localStorage load effect - currentUser:", currentUser ? currentUser.user_id : "null");
-    if (currentUser) {
-      const storedTrackedUsers = localStorage.getItem(`trackedUsers_${currentUser.user_id}`);
-      if (storedTrackedUsers) {
-        try {
-          const parsedUsers: UserProfile[] = JSON.parse(storedTrackedUsers);
-          parsedUsers.forEach(user => {
-            if (!Array.isArray(user.associatedServerIds)) {
-              user.associatedServerIds = [];
-            }
-          });
-          console.log("MAINCONTENT: localStorage load effect - setting trackedUsers from storage:", parsedUsers.map(u => u.username));
-          setTrackedUsers(parsedUsers);
-        } catch (error) {
-          console.error("Error parsing tracked users from localStorage:", error);
-          localStorage.removeItem(`trackedUsers_${currentUser.user_id}`);
-          setTrackedUsers([]); // Set to empty if parsing failed
-        }
-      } else {
-        console.log("MAINCONTENT: localStorage load effect - no stored users, setting to empty.");
-        setTrackedUsers([]);
-      }
-      setIsInitialTrackedUsersLoaded(true); // Mark as loaded/attempted for this currentUser
-    } else {
-      console.log("MAINCONTENT: localStorage load effect - no currentUser, setting trackedUsers to empty.");
-      setTrackedUsers([]);
-      setIsInitialTrackedUsersLoaded(false); // Reset when logged out
-    }
-  }, [currentUser]);
+    console.log("MAINCONTENT: Main data fetch effect. currentUser:", !!currentUser, "trackedUsers prop length:", trackedUsers.length, "selectedServerId:", selectedServerId);
 
-  // Effect for persisting trackedUsers to localStorage (no change needed)
-  useEffect(() => {
-    if (currentUser && isInitialTrackedUsersLoaded) { // Only save if initial load is done and user exists
-      if (trackedUsers.length > 0) {
-        localStorage.setItem(`trackedUsers_${currentUser.user_id}`, JSON.stringify(trackedUsers));
-      } else {
-        localStorage.removeItem(`trackedUsers_${currentUser.user_id}`);
-      }
-    }
-  }, [trackedUsers, currentUser, isInitialTrackedUsersLoaded]);
-
-  // Effect for clearing all component state on logout
-  useEffect(() => {
-    if (!currentUser) {
-      setTrackedUsers([]);
-      setIsRatingModalOpen(false);
-      setUserToRate(null);
-      setRatingError(null);
-      setMultiLineGraphData([]);
-      setLineConfigs([]);
-      setIsLoadingMultiLineGraph(false);
-      setMultiLineGraphError(null);
-      setOverallMinScore(0);
-      setOverallMaxScore(100);
-      setIsUntrackConfirmModalOpen(false);
-      setUserToUntrack(null);
-      setIsInitialTrackedUsersLoaded(false); // Ensure this is reset on logout
-    }
-  }, [currentUser]);
-
-  // Main data fetching and processing logic - this drives what users are processed by fetchAllTrackedUserScores
-  useEffect(() => {
-    console.log("MAINCONTENT: Main data fetch effect. currentUser:", !!currentUser, "isInitialTrackedUsersLoaded:", isInitialTrackedUsersLoaded, "trackedUsers length:", trackedUsers.length, "selectedServerId:", selectedServerId);
-
-    if (currentUser && isInitialTrackedUsersLoaded) {
+    if (currentUser && trackedUsers.length > 0) {
       let usersToProcessForGraph = trackedUsers;
+      // Filter for graph display based on selectedServerId (if not global)
       if (selectedServerId && selectedServerId !== globalViewServerId) {
         console.log(`MAINCONTENT: Main data fetch - Server View for ${selectedServerId}. Filtering tracked users for graph display.`);
         usersToProcessForGraph = trackedUsers.filter(user => user.associatedServerIds?.includes(selectedServerId));
@@ -255,7 +196,7 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
         console.log("MAINCONTENT: Main data fetch - Calling fetchAllTrackedUserScores for:", usersToProcessForGraph.map(u => u.username));
         fetchAllTrackedUserScores(usersToProcessForGraph);
       } else {
-        console.log("MAINCONTENT: Main data fetch - No users to display on graph (either no tracked users or filter resulted in empty). Clearing graph.");
+        console.log("MAINCONTENT: Main data fetch - No users to display on graph. Clearing graph.");
         setMultiLineGraphData([]);
         setLineConfigs([]);
         setMultiLineGraphError(null);
@@ -265,30 +206,42 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
       console.log("MAINCONTENT: Main data fetch - No current user, clearing graph.");
       setMultiLineGraphData([]); setLineConfigs([]); setIsLoadingMultiLineGraph(false); setMultiLineGraphError(null);
     }
-    // If currentUser exists but isInitialTrackedUsersLoaded is false, this effect waits.
-  }, [currentUser, trackedUsers, selectedServerId, globalViewServerId, fetchAllTrackedUserScores, isInitialTrackedUsersLoaded]);
+    // This effect now depends on the `trackedUsers` prop from App.tsx
+  }, [currentUser, trackedUsers, selectedServerId, globalViewServerId, fetchAllTrackedUserScores]);
 
-  const handleTrackUser = (userToTrack: UserProfile) => {
-    setTrackedUsers(prevTrackedUsers => {
-      if (prevTrackedUsers.find(user => user.id === userToTrack.id)) {
-        // If user already tracked, potentially add current selectedServerId if not global and not already there
-        return prevTrackedUsers.map(user => {
-          if (user.id === userToTrack.id) {
-            const currentAssociatedServers = user.associatedServerIds || [];
-            if (selectedServerId && selectedServerId !== globalViewServerId && !currentAssociatedServers.includes(selectedServerId)) {
-              return { ...user, associatedServerIds: [...currentAssociatedServers, selectedServerId] };
-            }
-          }
-          return user;
+  const handleTrackUser = async (userToTrack: UserProfile) => {
+    if (!currentUser || !selectedServerId) return;
+
+    try {
+      // If we're in a specific server view, add a rating to associate the user with this server
+      if (selectedServerId !== globalViewServerId) {
+        const token = localStorage.getItem('app_access_token');
+        if (!token) {
+          console.error("No auth token found");
+          return;
+        }
+
+        // Add a neutral rating (0) to associate the user with this server
+        await fetch(`http://localhost:8000/users/${currentUser.user_id}/credit/${userToTrack.id}`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            score_delta: 0,
+            reason: "Server association",
+            server_id: selectedServerId
+          }),
         });
       }
-      // New user to track
-      let initialAssociatedServers: string[] = [];
-      if (selectedServerId && selectedServerId !== globalViewServerId) {
-        initialAssociatedServers.push(selectedServerId);
-      }
-      return [...prevTrackedUsers, { ...userToTrack, associatedServerIds: initialAssociatedServers }];
-    });
+
+      // Refresh the tracked users list
+      await refreshTrackedUsers();
+    } catch (error) {
+      console.error("Error tracking user:", error);
+      alert("Failed to track user. Please try again.");
+    }
   };
 
   const openRatingModal = (targetUser: UserProfile) => {
@@ -341,7 +294,7 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
 
       console.log('Rating submitted successfully!', await response.json());
       closeRatingModal();
-      fetchAllTrackedUserScores(trackedUsers); // Refresh multi-line graph data
+      await refreshTrackedUsers();
 
     } catch (err: any) {
       console.error("Failed to submit rating:", err);
@@ -392,7 +345,7 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
       }
 
       console.log('Last rating removed successfully for', targetUser.username, await response.json());
-      fetchAllTrackedUserScores(trackedUsers); // Refresh graph data
+      await refreshTrackedUsers();
 
     } catch (err: any) {
       // Error already logged or alerted by the if(!response.ok) block
@@ -423,8 +376,8 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
       return;
     }
 
-    setIsSubmitting(true); // Indicate an operation is in progress
-    const userBeingUntracked = userToUntrack; // Store before state is cleared
+    setIsSubmitting(true);
+    const userBeingUntracked = userToUntrack;
 
     try {
       const token = localStorage.getItem('app_access_token');
@@ -435,7 +388,6 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
         return;
       }
 
-      // Call backend to delete score history for this user pair
       const response = await fetch(`http://localhost:8000/users/${currentUser.user_id}/tracking/${userBeingUntracked.id}`, {
         method: 'DELETE',
         headers: {
@@ -443,21 +395,19 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
         },
       });
 
-      if (!response.ok && response.status !== 204) { // 204 is a success for DELETE with no content
+      if (!response.ok && response.status !== 204) {
         const errorData = await response.json().catch(() => ({ detail: "Failed to untrack user on server." }));
         const detail = errorData.detail || `Error: ${response.status}`;
         console.error("Failed to untrack user (server-side):", detail);
         alert(`Could not untrack user: ${detail}`);
-        // Do not proceed with frontend untrack if backend failed critically
         setIsSubmitting(false);
         handleCloseUntrackConfirmModal();
         return;
       }
 
-      // If backend is successful (200-299 or 204 specifically), then update frontend state
-      setTrackedUsers(prevUsers => prevUsers.filter(user => user.id !== userBeingUntracked.id));
-      // localStorage update will be triggered by the useEffect watching trackedUsers
-      console.log(`Untracked user: ${userBeingUntracked.username} (client-side and server-side scores cleared).`);
+      // Refresh the tracked users list from backend
+      await refreshTrackedUsers();
+      console.log(`Untracked user: ${userBeingUntracked.username}`);
 
     } catch (error) {
       console.error("Error during untrack operation:", error);
@@ -471,16 +421,41 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
   // Determine the list of users to display based on selectedServerId
   const displayedTrackedUsers = React.useMemo(() => {
     if (!selectedServerId || selectedServerId === globalViewServerId) {
-      return trackedUsers; // Show all for global view
+      return trackedUsers; // Show all for global view, trackedUsers is already the full list from props
     }
     // For a specific server, filter by associatedServerIds
-    // This relies on associatedServerIds being populated correctly when a user is tracked.
     return trackedUsers.filter(user => user.associatedServerIds?.includes(selectedServerId));
   }, [trackedUsers, selectedServerId, globalViewServerId]);
 
+  const toggleSearchVisibility = () => {
+    setIsSearchVisible(prev => !prev);
+  };
+
   return (
     <div className="main-content-container">
-      <UserSearch selectedServerId={selectedServerId} onTrackUser={handleTrackUser} />
+      <div className="main-content-header"> {/* Optional: Add a container for header elements */}
+        <button onClick={toggleSearchVisibility} className="icon-button search-toggle-button" title={isSearchVisible ? "Hide Search" : "Show Search"}>
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="20px" height="20px">
+            <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z" />
+          </svg>
+        </button>
+        {/* Potentially add other header controls here */}
+      </div>
+
+      {/* Conditionally render UserSearch in an animated popup */}
+      <div className={`user-search-popup ${isSearchVisible ? 'visible' : ''}`}>
+        <UserSearch
+          selectedServerId={selectedServerId}
+          onTrackUser={handleTrackUser}
+          currentServerContext={selectedServerId === globalViewServerId ? null : selectedServerId}
+        />
+      </div>
+
+      {trackedUsersError && (
+        <div className="error-message">
+          Error loading tracked users: {trackedUsersError}
+        </div>
+      )}
 
       <div className="graph-display-area">
         <ScoreGraph
@@ -493,8 +468,8 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
           lineConfigs={lineConfigs}
           overallMinScore={overallMinScore}
           overallMaxScore={overallMaxScore}
-          isLoading={isLoadingMultiLineGraph}
-          error={multiLineGraphError}
+          isLoading={isLoadingMultiLineGraph || isLoadingTrackedUsers}
+          error={multiLineGraphError || trackedUsersError}
         />
       </div>
 
@@ -508,9 +483,14 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
           <ul className="tracked-users-list">
             {displayedTrackedUsers.map(user => {
               const displayedServerIcons = (user.associatedServerIds || [])
-                .map(serverId => userServers.find(s => s.id === serverId))
-                .filter(server => !!server) as ServerData[]; // Filter out undefined and assert type
+                .map(serverId => {
+                  const server = userServers.find(s => s.id === serverId);
+                  console.log(`User ${user.username} server ${serverId} lookup:`, server ? server.name : 'not found');
+                  return server;
+                })
+                .filter(server => !!server) as ServerData[];
 
+              console.log(`User ${user.username} final displayed servers:`, displayedServerIcons.map(s => s.name));
               return (
                 <li key={user.id} className="tracked-user-item">
                   <img

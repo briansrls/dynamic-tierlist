@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import './App.css';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import ServerList from './components/ServerList';
 import MainContent from './components/MainContent';
+import { UserProfile } from './components/UserSearch';
 import UserProfileDisplay from './components/UserProfileDisplay';
 import AuthCallbackPage from './components/AuthCallbackPage';
 import SettingsModal from './components/SettingsModal';
@@ -12,6 +13,7 @@ export interface ServerData {
   id: string;
   name: string;
   icon: string | null;
+  trackedUserCount?: number; // Optional: count of users tracked in this server
 }
 
 // Define a type for our user state (can be expanded)
@@ -21,26 +23,32 @@ export interface AppUser {
   user_id: string; // From Discord
 }
 
-export const GLOBAL_VIEW_SERVER_ID = "global_view";
+export const GLOBAL_VIEW_SERVER_ID = 'global_view_all_tracked';
 
 // Main layout component
 const MainLayout: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [userServers, setUserServers] = useState<ServerData[]>([]);
-  const [selectedServerId, setSelectedServerId] = useState<string | null>(GLOBAL_VIEW_SERVER_ID); // Default to global
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(GLOBAL_VIEW_SERVER_ID);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
-  const [isLoadingServers, setIsLoadingServers] = useState(false); // Re-enable this state
-  const [serverError, setServerError] = useState<string | null>(null); // Re-enable this state
+  const [isLoadingServers, setIsLoadingServers] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
   const [showLogoutPrompt, setShowLogoutPrompt] = useState(false);
-  const [minimumLoadTimePassed, setMinimumLoadTimePassed] = useState(false); // New state for min load time
-  const [isLoggingOut, setIsLoggingOut] = useState(false); // New state for fade-out
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false); // New state for settings modal
+  const [minimumLoadTimePassed, setMinimumLoadTimePassed] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+
+  // --- State lifted from MainContent ---
+  const [trackedUsers, setTrackedUsers] = useState<UserProfile[]>([]);
+  const [isLoadingTrackedUsers, setIsLoadingTrackedUsers] = useState(false);
+  const [trackedUsersError, setTrackedUsersError] = useState<string | null>(null);
+  // --- End lifted state ---
 
   // Refs for click-outside logic
   const profileAreaRef = React.useRef<HTMLDivElement>(null); // For the .user-actions-area
   const logoutButtonRef = React.useRef<HTMLButtonElement>(null); // For the .popup-logout-button
 
-  const fetchUserServers = useCallback(async (token: string) => { // Re-enable this function
+  const fetchUserServers = useCallback(async (token: string) => {
     setIsLoadingServers(true);
     setServerError(null);
     try {
@@ -67,10 +75,44 @@ const MainLayout: React.FC = () => {
       setUserServers([]);
     }
     setIsLoadingServers(false);
-  }, []); // Removed selectedServerId from dependencies, was causing re-fetches
+  }, []);
+
+  // --- fetchTrackedUsers lifted from MainContent ---
+  const fetchTrackedUsers = useCallback(async () => {
+    if (!currentUser) {
+      setTrackedUsers([]);
+      return;
+    }
+    setIsLoadingTrackedUsers(true);
+    setTrackedUsersError(null);
+    const token = localStorage.getItem('app_access_token');
+    if (!token) {
+      setTrackedUsersError("Authentication token not found.");
+      setIsLoadingTrackedUsers(false);
+      return;
+    }
+    try {
+      const response = await fetch(`http://localhost:8000/users/${currentUser.user_id}/rated-users`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `Error: ${response.status}`);
+      }
+      const users: UserProfile[] = await response.json();
+      setTrackedUsers(users);
+    } catch (err: any) {
+      console.error("Error fetching all rated users:", err);
+      setTrackedUsersError(err.message || "Failed to fetch rated users.");
+      setTrackedUsers([]);
+    } finally {
+      setIsLoadingTrackedUsers(false);
+    }
+  }, [currentUser?.user_id]);
+  // --- End lifted fetchTrackedUsers ---
 
   const fetchCurrentUser = useCallback(async (token: string) => {
-    console.log("fetchCurrentUser called with token:", token);
+    // console.log("APP: fetchCurrentUser called with token:", token);
     setIsLoadingAuth(true);
     try {
       const response = await fetch('http://localhost:8000/users/me', {
@@ -78,23 +120,23 @@ const MainLayout: React.FC = () => {
           'Authorization': `Bearer ${token}`,
         },
       });
-      console.log("fetchCurrentUser response status:", response.status);
+      // console.log("APP: fetchCurrentUser response status:", response.status);
       if (response.ok) {
-        const userData = await response.json();
-        console.log("fetchCurrentUser success, user data:", userData);
-        setCurrentUser({
-          username: userData.username,
-          profilePicUrl: userData.profile_picture_url,
-          user_id: userData.user_id,
+        const backendUserData = await response.json(); // Data from backend
+        // console.log("APP: fetchCurrentUser success, user data:", backendUserData);
+        setCurrentUser({ // Explicitly map to AppUser interface
+          username: backendUserData.username,
+          profilePicUrl: backendUserData.profile_picture_url, // Map snake_case to camelCase
+          user_id: backendUserData.user_id,
         });
-        fetchUserServers(token); // Re-enable this call
+        fetchUserServers(token);
       } else {
-        console.error("Failed to fetch current user, status:", response.status, "Response:", await response.text());
+        // console.error("APP: Failed to fetch current user, status:", response.status);
         localStorage.removeItem('app_access_token');
         setCurrentUser(null);
-        setUserServers([]); // Clear servers on auth failure
-        setServerError(null); // Clear server errors
-        setSelectedServerId(GLOBAL_VIEW_SERVER_ID); // Reset to global on auth failure
+        setUserServers([]);
+        setServerError(null);
+        setSelectedServerId(GLOBAL_VIEW_SERVER_ID);
         setShowLogoutPrompt(false);
         setIsLoggingOut(false);
       }
@@ -102,9 +144,9 @@ const MainLayout: React.FC = () => {
       console.error("Error fetching current user:", error);
       localStorage.removeItem('app_access_token');
       setCurrentUser(null);
-      setUserServers([]); // Clear servers on error
-      setServerError(null); // Clear server errors
-      setSelectedServerId(GLOBAL_VIEW_SERVER_ID); // Reset to global on error
+      setUserServers([]);
+      setServerError(null);
+      setSelectedServerId(GLOBAL_VIEW_SERVER_ID);
       setShowLogoutPrompt(false);
       setIsLoggingOut(false);
     }
@@ -171,6 +213,15 @@ const MainLayout: React.FC = () => {
     };
   }, [showLogoutPrompt]);
 
+  // Effect to fetch tracked users when currentUser or its user_id changes
+  useEffect(() => {
+    if (currentUser?.user_id) {
+      fetchTrackedUsers();
+    } else {
+      setTrackedUsers([]);
+    }
+  }, [currentUser?.user_id, fetchTrackedUsers]);
+
   const handleLogin = () => {
     window.location.href = 'http://localhost:8000/auth/discord/login';
   };
@@ -194,6 +245,54 @@ const MainLayout: React.FC = () => {
 
   const openSettingsModal = () => setIsSettingsModalOpen(true);
   const closeSettingsModal = () => setIsSettingsModalOpen(false);
+
+  // --- Calculate displayedUserServers with counts ---
+  const displayedUserServers = React.useMemo(() => {
+    const serversWithCounts: ServerData[] = userServers.map(server => {
+      if (server.id === GLOBAL_VIEW_SERVER_ID) {
+        // For global view, count is total unique tracked users
+        // Or, we could just not show a count for global, or show total tracked users.
+        // Let's show total unique tracked users for global for now.
+        return { ...server, trackedUserCount: trackedUsers.length };
+      }
+      // For actual servers, count users associated with this server_id
+      let count = 0;
+      if (trackedUsers && trackedUsers.length > 0) {
+        trackedUsers.forEach(user => {
+          if (user.associatedServerIds?.includes(server.id)) {
+            count++;
+          }
+        });
+      }
+      return { ...server, trackedUserCount: count };
+    });
+
+    if (!currentUser) {
+      return serversWithCounts; // Show all (with potential zero counts) if not logged in but servers were somehow loaded
+    }
+    // If user is logged in but has no tracked users yet, show all their servers with 0 counts (except global)
+    if (trackedUsers.length === 0 && currentUser) {
+      return serversWithCounts;
+    }
+
+    const activeServerIds = new Set<string>();
+    trackedUsers.forEach(user => {
+      user.associatedServerIds?.forEach((serverId: string) => activeServerIds.add(serverId));
+    });
+
+    const filtered = serversWithCounts.filter(server =>
+      server.id === GLOBAL_VIEW_SERVER_ID || activeServerIds.has(server.id)
+    );
+
+    // Ensure global view is always first if present and sort others if needed
+    const globalView = filtered.find(s => s.id === GLOBAL_VIEW_SERVER_ID);
+    const otherServers = filtered.filter(s => s.id !== GLOBAL_VIEW_SERVER_ID);
+    // Optional: Sort otherServers alphabetically by name, e.g., otherServers.sort((a, b) => a.name.localeCompare(b.name));
+
+    return globalView ? [globalView, ...otherServers] : otherServers;
+
+  }, [userServers, trackedUsers, currentUser]);
+  // --- End Calculate displayedUserServers ---
 
   // 1. Initial Loading Phase (Auth check or minimum display time not passed)
   if (isLoadingAuth || !minimumLoadTimePassed) {
@@ -237,7 +336,7 @@ const MainLayout: React.FC = () => {
     <div className={`App ${isLoggingOut ? 'app-fading-out' : 'app-loaded'}`}> {/* Conditionally add fading-out class */}
       <div className="sidebar-container">
         <ServerList
-          servers={userServers}
+          servers={displayedUserServers}
           isLoading={isLoadingServers}
           error={serverError}
           selectedServerId={selectedServerId}
@@ -285,6 +384,10 @@ const MainLayout: React.FC = () => {
         currentUser={currentUser}
         userServers={userServers}
         globalViewServerId={GLOBAL_VIEW_SERVER_ID}
+        trackedUsers={trackedUsers}
+        isLoadingTrackedUsers={isLoadingTrackedUsers}
+        trackedUsersError={trackedUsersError}
+        refreshTrackedUsers={fetchTrackedUsers}
       />
       {isSettingsModalOpen && (
         <SettingsModal

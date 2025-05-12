@@ -18,7 +18,9 @@ export interface ScoreEntry {
   score_value: number;
   reason?: string | null;
   server_id?: string | null;   // Added from backend model
+  channel_id?: string | null;  // Added from backend model
   message_id?: string | null;  // Added from backend model
+  message_content_snippet?: string | null; // Added from backend model
   // Remove mock data specific fields like sc9_vs_theebis, sc9_vs_vough, user, time
 }
 
@@ -187,6 +189,43 @@ interface ScoreGraphProps {
   error?: string | null; // Added error prop
 }
 
+// Custom Tooltip Component
+const CustomTooltip = (props: any) => {
+  const { active, payload, label } = props;
+
+  if (active && payload && payload.length) {
+    const dataPoint = payload[0].payload; // The underlying data for this point
+    const lineName = payload[0].name; // e.g., "User1" or "Score"
+    const scoreValue = payload[0].value;
+
+    // Attempt to find related ScoreEntry details if multi-line
+    // This assumes the payload structure might hold ScoreEntry-like details
+    // A more robust approach might involve restructuring data or passing full ScoreEntry[] 
+    // alongside MultiLineGraphDataPoint[] to the component.
+    // For now, let's check if the payload itself has the details.
+    const scoreEntryDetails = dataPoint as ScoreEntry;
+
+    return (
+      <div className="custom-tooltip">
+        <p className="label">{`${new Date(label).toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}</p>
+        <p className="intro">{`${lineName}: ${scoreValue}`}</p>
+        {scoreEntryDetails.reason && (
+          <p className="reason">Reason: {scoreEntryDetails.reason}</p>
+        )}
+        {scoreEntryDetails.message_content_snippet && (
+          <p className="message-snippet">Message: "{scoreEntryDetails.message_content_snippet}"</p>
+        )}
+        {scoreEntryDetails.message_id && (
+          <p className="message-id">ID: {scoreEntryDetails.message_id} (Channel: {scoreEntryDetails.channel_id || 'N/A'})</p>
+          // TODO: Add copy button for message_id
+        )}
+      </div>
+    );
+  }
+
+  return null;
+};
+
 const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, overallMinScore, overallMaxScore, isLoading, error }) => {
   const [mouseYInChart, setMouseYInChart] = useState<number | null>(null);
 
@@ -333,16 +372,17 @@ const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, 
               dataKey={!isMultiLine ? "score_value" : undefined}
             />
             <Tooltip
-              labelFormatter={(numericalTimestamp: number) => {
-                if (typeof numericalTimestamp !== 'number') return '';
-                try {
-                  const date = new Date(numericalTimestamp);
-                  return date.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-                } catch (e) {
-                  return 'Invalid Date';
-                }
-              }}
-              formatter={tooltipFormatter}
+              // labelFormatter={(numericalTimestamp: number) => {
+              //   if (typeof numericalTimestamp !== 'number') return '';
+              //   try {
+              //     const date = new Date(numericalTimestamp);
+              //     return date.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+              //   } catch (e) {
+              //     return 'Invalid Date';
+              //   }
+              // }}
+              // formatter={tooltipFormatter} -- Using content prop instead
+              content={<CustomTooltip />}
             />
             <Legend />
             {isMultiLine && lineConfigs ? (

@@ -79,6 +79,9 @@
   align-items: center;
   overflow-y: auto; /* In case of many servers */
   flex-grow: 1; /* Allows ServerList to take up available space */
+  /* Add a test max-height to force scrolling if content exceeds it */
+  max-height: calc(100vh - 200px); /* Example: viewport height minus approx height of top/bottom elements */
+  /* Adjust 200px based on the actual height of elements outside the scrollable server list */
 }
 
 .server-icon {
@@ -205,6 +208,7 @@
   padding: 20px;
   background-color: #36393f; /* Main content area background */
   overflow-y: auto; /* If content overflows */
+  position: relative; /* Needed for absolute positioning of children like the search popup */
 }
 
 /* Remove default CRA styles if they are still there */
@@ -389,16 +393,15 @@
 
 /* --- UserSearch Component Styles --- */
 .user-search-container {
-  margin-bottom: 20px;
-  padding: 15px;
-  background-color: #2f3136; /* Slightly lighter than main content for definition */
-  border-radius: 8px;
+  padding: 0; /* Remove padding as it's on the popup wrapper now */
+  background-color: transparent; /* Make original container transparent */
+  border-radius: 0; /* Remove radius as it's on the popup */
 }
 
 .user-search-input {
   width: 100%;
-  padding: 10px;
-  margin-bottom: 15px;
+  padding: 8px; /* Slightly reduce padding */
+  margin-bottom: 8px; /* Reduced margin */
   background-color: #202225; /* Darker input background */
   color: #dcddde; /* Light text */
   border: 1px solid #18191c; /* Subtle border */
@@ -414,8 +417,8 @@
 .user-search-loading,
 .user-search-error,
 .user-search-no-results {
-  padding: 10px;
-  margin-bottom: 10px;
+  padding: 8px; /* Slightly reduce padding */
+  margin-bottom: 5px; /* Reduced margin */
   border-radius: 4px;
   color: #dcddde;
 }
@@ -442,8 +445,8 @@
 .user-search-result-item {
   display: flex;
   align-items: center;
-  padding: 10px;
-  margin-bottom: 8px;
+  padding: 8px; /* Slightly reduce padding */
+  margin-bottom: 5px; /* Reduced margin */
   background-color: #36393f; /* Same as main content background */
   border-radius: 4px;
   transition: background-color 0.2s ease-in-out;
@@ -1102,4 +1105,127 @@
 /* Optional: Specific styling for settings modal content if it needs to be wider/taller */
 .settings-modal-content {
   /* max-width: 600px; */ /* Example: make it wider than default modal */
+}
+
+/* --- Tracked User Count Badge --- */
+.server-user-count-badge {
+  position: absolute;
+  bottom: -2px;
+  right: -4px;
+  background-color: #4f545c; /* Discord dark grey */
+  color: #fff;
+  font-size: 10px;
+  font-weight: bold;
+  padding: 1px 4px;
+  border-radius: 8px; /* Fully rounded small circle */
+  border: 2px solid #202225; /* Use server list background for border */
+  line-height: 1; /* Tighten line height */
+  z-index: 2; /* Ensure it's above the icon and the sliver */
+  pointer-events: none; /* Don't interfere with icon clicks */
+}
+
+/* Example of the side bar for selected, more advanced CSS needed for precise Discord look
+.server-icon.selected::before {
+  content: '';
+  position: absolute;
+  left: -8px; 
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 40%; 
+  background-color: #fff;
+  border-radius: 0 4px 4px 0;
+}
+*/
+
+/* --- Main Content Area Header (Optional) --- */
+.main-content-header {
+  display: flex;
+  justify-content: flex-end; /* Align items (like search icon) to the right */
+  margin-bottom: 15px; /* Space below the header */
+  /* Add padding or other styles if needed */
+}
+
+.search-toggle-button {
+  /* Inherits from .icon-button */
+  padding: 6px; /* Adjust padding if needed */
+  position: relative; /* Needed for z-index */
+  z-index: 11; /* Ensure button is above the popup */
+  margin-left: auto; /* Push button to the far right if header uses flex-start */
+}
+
+.search-toggle-button svg {
+  fill: #b9bbbe; /* Discord medium-grey icon color */
+  width: 20px;   /* Match SVG size */
+  height: 20px;
+}
+
+.search-toggle-button:hover svg {
+  fill: #fff; /* White on hover */
+}
+
+/* --- User Search Popup Styles --- */
+.user-search-popup {
+  position: absolute;
+  top: 8px; /* Closer to the header */
+  right: 15px; /* Align near the right edge (near button) */
+  max-width: 350px; /* Slightly smaller max-width */
+  width: 90%; 
+  z-index: 10; 
+  background-color: #2f3136; 
+  padding: 10px; /* Reduced padding */
+  border-radius: 8px; 
+  box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+  opacity: 0;
+  transform: translateX(-105%); /* Start off-screen to the left */
+  transition: opacity 0.3s ease-out, transform 0.3s ease-out;
+  pointer-events: none; 
+}
+
+.user-search-popup.visible {
+  opacity: 1;
+  transform: translateX(0); /* Slide in from the left */
+  pointer-events: auto; 
+}
+
+/* --- ScoreGraph Tooltip Customization --- */
+.custom-tooltip {
+  background-color: rgba(47, 49, 54, 0.9); /* Slightly transparent dark background */
+  border: 1px solid #202225;
+  padding: 10px;
+  border-radius: 5px;
+  color: #dcddde; /* Light text */
+  font-size: 0.9em;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+
+.custom-tooltip .label {
+  font-weight: bold;
+  margin-bottom: 8px;
+  color: #fff; /* White label */
+}
+
+.custom-tooltip .intro {
+  margin-bottom: 5px;
+}
+
+.custom-tooltip .reason,
+.custom-tooltip .message-snippet,
+.custom-tooltip .message-id {
+  margin-top: 5px;
+  font-size: 0.9em;
+  opacity: 0.8; /* Slightly dimmer */
+}
+
+.custom-tooltip .message-snippet {
+  font-style: italic;
+  max-width: 300px; /* Prevent overly wide tooltips */
+  word-wrap: break-word; /* Wrap long snippets */
+}
+
+/* Optional: Style for copyable IDs or links if added later */
+
+/* Force Recharts SVG surface to allow overflow for custom dots */
+.recharts-surface {
+  overflow: visible !important;
 }

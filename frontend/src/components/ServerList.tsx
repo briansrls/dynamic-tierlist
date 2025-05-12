@@ -5,6 +5,7 @@ interface ServerData {
   id: string;
   name: string;
   icon: string | null; // Icon hash from Discord, can be null
+  trackedUserCount?: number; // Add this to the interface
 }
 
 // Props that ServerList will now accept
@@ -102,6 +103,12 @@ const ServerList: React.FC<ServerListProps> = ({ servers, isLoading, error, sele
               getServerInitials(server.name) // Use the new helper
             )}
           </div>
+          {/* Add tracked user count badge if count is greater than 0 */}
+          {server.trackedUserCount && server.trackedUserCount > 0 && (
+            <span className="server-user-count-badge">
+              {server.trackedUserCount}
+            </span>
+          )}
         </div>
       ))}
     </div>

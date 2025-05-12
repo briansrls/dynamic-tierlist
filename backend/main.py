@@ -4,18 +4,45 @@ from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware # Import CORS middleware
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from fastapi import Path
 import secrets # For generating secure tokens
 
-from core.config import settings
+from backend.core.config import settings
 import httpx
 import urllib.parse
 from jose import JWTError, jwt
 from datetime import timedelta # For token expiry
 
+import sys
+print(f"--- sys.path BEFORE imports ---")
+print(sys.path)
+print(f"-------------------------------")
+
+# Import database functions and models
+from backend.core.database import (
+    init_db,
+    close_mongodb_connection,
+    get_user as db_get_user,
+    upsert_user as db_upsert_user,
+    update_user_api_key as db_update_user_api_key,
+    verify_user_api_key as db_verify_user_api_key,
+    get_server as db_get_server,
+    upsert_server as db_upsert_server,
+    db # Import the db object itself
+)
+
 app = FastAPI()
+
+# --- Database Startup/Shutdown Events ---
+@app.on_event("startup")
+async def startup_db_client():
+    await init_db()
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    await close_mongodb_connection()
 
 # --- CORS Middleware --- 
 # This should be among the first middleware added if you have multiple.
@@ -38,8 +65,10 @@ class ScoreEntry(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     score_value: float  # Absolute score at this timestamp
     reason: Optional[str] = None
-    server_id: Optional[str] = None   # NEW for plugin context
-    message_id: Optional[str] = None  # NEW for plugin context
+    server_id: Optional[str] = None   # Context from plugin
+    channel_id: Optional[str] = None  # Context from plugin
+    message_id: Optional[str] = None  # Context from plugin
+    message_content_snippet: Optional[str] = None # Added: Snippet from plugin
 
 class UserSocialCreditTarget(BaseModel):
     target_user_id: str
@@ -59,13 +88,15 @@ class User(BaseModel):
     profile_picture_url: Optional[str] = None
     social_credits_given: List[UserSocialCreditTarget] = []
     servers: List[UserServerInfo] = []
-    plugin_api_key: Optional[str] = None # New field for user-specific plugin API key
-    plugin_api_key_generated_at: Optional[datetime] = None # New field for generation time
+    plugin_api_key: Optional[str] = None # This is correct on the User model
+    plugin_api_key_generated_at: Optional[datetime] = None # This is correct on the User model
 
 class Server(BaseModel):
     server_id: str
     server_name: str
     user_ids: List[str] = []
+    # reason: Optional[str] = None # REMOVE - Reason belongs to ScoreEntry
+    # No score_delta needed, calculate based on history? No, pass delta from plugin. # REMOVE - Comment not relevant to Server model
 
 class SocialCreditUpdateRequest(BaseModel):
     score_delta: float
@@ -87,6 +118,7 @@ class DiscordUserProfile(BaseModel):
     banner: Optional[str] = None # Banner hash
     accent_color: Optional[int] = None
     public_flags: Optional[int] = None
+    associatedServerIds: Optional[List[str]] = None  # Add this field to match frontend
 
 class GuildMemberStatus(BaseModel):
     server_id: str
@@ -99,66 +131,29 @@ class PluginRatingCreate(BaseModel):
     acting_user_id: str # Discord ID of user using the plugin
     target_user_id: str # Discord ID of user whose message was rated
     server_id: str
+    channel_id: str # NEW: ID of the channel where message occurred
     message_id: str
     score_delta: float
+    message_content_snippet: str # Added: Snippet from plugin
     # No reason field as per request
+
+# --- Response Models ---
+class PluginApiKeyResponse(BaseModel):
+    api_key: str
+    generated_at: datetime
 
 # --- In-Memory Database ---
 # For now, we'll use dictionaries to simulate MongoDB collections.
 # In a real application, these would be replaced with MongoDB operations.
 
-db_users: Dict[str, User] = {}  # Keyed by user_id
-db_servers: Dict[str, Server] = {} # Keyed by server_id
+# db_users: Dict[str, User] = {}  # Keyed by user_id
+# db_servers: Dict[str, Server] = {} # Keyed by server_id
 
 # --- Sample Data ---
-def initialize_sample_data():
-    # Clear existing data
-    db_users.clear()
-    db_servers.clear()
+# def initialize_sample_data(): - REMOVED
+    # ... entire function removed ...
 
-    # Sample Users
-    user1 = User(user_id="u1", username="Alice", profile_picture_url="https://example.com/alice.png")
-    user2 = User(user_id="u2", username="Bob", profile_picture_url="https://example.com/bob.png")
-    user3 = User(user_id="u3", username="Charlie", profile_picture_url="https://example.com/charlie.png")
-    user4 = User(user_id="u4", username="Diana") # User in another server or no server yet
-
-    db_users[user1.user_id] = user1
-    db_users[user2.user_id] = user2
-    db_users[user3.user_id] = user3
-    db_users[user4.user_id] = user4
-
-    # Sample Servers
-    server1 = Server(server_id="s1", server_name="Gaming Crew", user_ids=["u1", "u2"])
-    server2 = Server(server_id="s2", server_name="Study Group", user_ids=["u1", "u3"])
-    
-    db_servers[server1.server_id] = server1
-    db_servers[server2.server_id] = server2
-
-    # Sample Social Credit Data: Alice gives Bob a score
-    alice_gives_bob_credit = UserSocialCreditTarget(target_user_id="u2")
-    alice_gives_bob_credit.scores_history.append(
-        ScoreEntry(score_value=10, reason="Initial good impression")
-    )
-    alice_gives_bob_credit.scores_history.append(
-        ScoreEntry(score_value=15, reason="Helped with a quest")
-    )
-    user1.social_credits_given.append(alice_gives_bob_credit)
-    
-    # Alice gives Charlie a score
-    alice_gives_charlie_credit = UserSocialCreditTarget(target_user_id="u3")
-    alice_gives_charlie_credit.scores_history.append(
-        ScoreEntry(score_value=5, reason="Joined late to study session")
-    )
-    user1.social_credits_given.append(alice_gives_charlie_credit)
-
-    # Bob gives Alice a score
-    bob_gives_alice_credit = UserSocialCreditTarget(target_user_id="u1")
-    bob_gives_alice_credit.scores_history.append(
-        ScoreEntry(score_value=8, reason="Friendly")
-    )
-    user2.social_credits_given.append(bob_gives_alice_credit)
-
-initialize_sample_data() # Initialize with sample data when the app starts
+# initialize_sample_data() # Initialize with sample data when the app starts - REMOVED
 
 # --- API Key Authentication for Plugin (Modified for Per-User Keys) ---
 USER_PLUGIN_API_KEY_HEADER_NAME = "X-Plugin-API-Key"
@@ -176,66 +171,250 @@ async def get_authenticated_plugin_user(
     if not acting_user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{ACTING_USER_ID_HEADER_NAME} header is missing")
 
-    # Try to ensure the acting_user_id from the header exists in db_users
-    # This is important if the backend restarted and lost the in-memory user from OAuth login
-    async with httpx.AsyncClient() as client:
-        await ensure_user_in_db(acting_user_id, client) # Call helper here
-
-    user = db_users.get(acting_user_id)
-    if not user: # Should ideally be populated by ensure_user_in_db if was missing
-        # This might indicate ensure_user_in_db failed to add them (e.g., Discord API down and bot token missing)
+    # Ensure the acting user exists in the DB
+    user_dict = await ensure_user_in_db(acting_user_id) # Modified call, removed client passing
+    if not user_dict:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Acting user ID {acting_user_id} could not be established in the system.")
-    
-    if not user.plugin_api_key:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User has not generated a Plugin API Key.")
 
-    # For direct comparison (not hashing for this mock DB example)
-    if user.plugin_api_key == user_provided_key:
-        return user # Return the authenticated user object
-    else:
+    # Now, verify the provided API key against the one stored (hashed) for this user
+    is_valid = await db_verify_user_api_key(acting_user_id, user_provided_key)
+
+    if not is_valid:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid User Plugin API Key.")
 
-# Helper function to ensure user exists in db_users, fetching from Discord if not
-async def ensure_user_in_db(user_id_to_check: str, client: httpx.AsyncClient):
-    if user_id_to_check not in db_users:
-        print(f"User {user_id_to_check} not in db_users. Attempting to fetch/create.") # Added log
-        if not settings.DISCORD_BOT_TOKEN:
-            print(f"WARNING: Cannot fetch profile for new user {user_id_to_check} - Bot token not configured.")
-            # Add a minimal user entry if bot token is missing
-            db_users[user_id_to_check] = User(user_id=user_id_to_check, username=f"User_{user_id_to_check[:6]}", servers=[], social_credits_given=[])
-            print(f"Added minimal entry for user {user_id_to_check} due to missing bot token.")
-            return
+    # Key is valid, return the user data (as a Pydantic model)
+    # Important: The stored key is the HASH, don't return it! Create user model from fetched dict.
+    user_dict.pop('plugin_api_key', None) # Don't expose hash
+    user_dict.pop('_id', None) # Remove MongoDB internal ID
+    return User(**user_dict)
 
-        discord_api_url = f"https://discord.com/api/v10/users/{user_id_to_check}"
-        headers = {"Authorization": f"Bot {settings.DISCORD_BOT_TOKEN}"}
+# Helper function to ensure user exists in db_users, fetching from Discord if not
+# Now returns the user dict from DB or None if fetch failed critically
+async def ensure_user_in_db(user_id_to_check: str) -> Optional[Dict[str, Any]]:
+    user = await db_get_user(user_id_to_check)
+    if user:
+        return user # User already exists
+
+    print(f"User {user_id_to_check} not in DB. Attempting to fetch/create.")
+
+    # Attempt to fetch from Discord API
+    if not settings.DISCORD_BOT_TOKEN:
+        print(f"WARNING: Cannot fetch profile for new user {user_id_to_check} - Bot token not configured.")
+        # Add a minimal user entry
+        minimal_user_data = {
+            "user_id": user_id_to_check,
+            "username": f"User_{user_id_to_check[:6]}",
+            "profile_picture_url": None,
+            "social_credits_given": [],
+            "servers": [], # Should be empty for a new minimal user
+            "plugin_api_key": None,
+            "plugin_api_key_generated_at": None
+        }
+        await db_upsert_user(minimal_user_data)
+        print(f"Added minimal entry for user {user_id_to_check} due to missing bot token.")
+        return await db_get_user(user_id_to_check)
+
+    discord_api_url = f"https://discord.com/api/v10/users/{user_id_to_check}"
+    headers_bot_auth = {"Authorization": f"Bot {settings.DISCORD_BOT_TOKEN}"} # Renamed to avoid confusion with OAuth headers
+    async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(discord_api_url, headers=headers)
+            response = await client.get(discord_api_url, headers=headers_bot_auth)
             if response.status_code == 200:
                 user_data = response.json()
                 username = user_data.get("username", f"User_{user_id_to_check[:6]}")
-                discriminator = user_data.get("discriminator", "0000")
                 avatar_hash = user_data.get("avatar")
                 avatar_full_url = None
                 if avatar_hash:
                     extension = "gif" if avatar_hash.startswith("a_") else "png"
                     avatar_full_url = f"https://cdn.discordapp.com/avatars/{user_id_to_check}/{avatar_hash}.{extension}?size=128"
                 
-                db_users[user_id_to_check] = User(
-                    user_id=user_id_to_check,
-                    username=username,
-                    profile_picture_url=avatar_full_url,
-                    servers=[], social_credits_given=[]
-                )
-                print(f"Fetched and added new user {username}#{discriminator} (ID: {user_id_to_check}) to db_users.")
+                new_user_data = {
+                    "user_id": user_id_to_check,
+                    "username": username,
+                    "profile_picture_url": avatar_full_url,
+                    "social_credits_given": [],
+                    "servers": [], # Default to empty, servers are populated by OAuth callback or plugin activity
+                    "plugin_api_key": None,
+                    "plugin_api_key_generated_at": None
+                }
+                await db_upsert_user(new_user_data)
+                print(f"Fetched and added new user {username} (ID: {user_id_to_check}) to DB.")
+                return await db_get_user(user_id_to_check)
             else:
                 print(f"Failed to fetch profile for new user {user_id_to_check} from Discord (Status: {response.status_code}). Adding minimal entry.")
-                db_users[user_id_to_check] = User(user_id=user_id_to_check, username=f"User_{user_id_to_check[:6]}", servers=[], social_credits_given=[])
+                # Add minimal user
+                minimal_user_data = {
+                    "user_id": user_id_to_check,
+                    "username": f"User_{user_id_to_check[:6]}",
+                     "profile_picture_url": None,
+                    "social_credits_given": [],
+                    "servers": [],
+                    "plugin_api_key": None,
+                    "plugin_api_key_generated_at": None
+                }
+                await db_upsert_user(minimal_user_data)
+                return await db_get_user(user_id_to_check)
         except Exception as e:
             print(f"Error fetching profile for new user {user_id_to_check}: {e}. Adding minimal entry.")
-            db_users[user_id_to_check] = User(user_id=user_id_to_check, username=f"User_{user_id_to_check[:6]}", servers=[], social_credits_given=[])
-    # If user already exists, their .servers and .social_credits_given are preserved.
-    # We might want to update their username/avatar here too, similar to get_discord_user_profile if this is a primary source.
-    # For now, ensure_user_in_db just focuses on existence.
+            # Add minimal user
+            minimal_user_data = {
+                    "user_id": user_id_to_check,
+                    "username": f"User_{user_id_to_check[:6]}",
+                     "profile_picture_url": None,
+                    "social_credits_given": [],
+                    "servers": [],
+                    "plugin_api_key": None,
+                    "plugin_api_key_generated_at": None
+                }
+            await db_upsert_user(minimal_user_data)
+            return await db_get_user(user_id_to_check)
+
+# --- OAuth Helper --- 
+# Need a way to get the DB for creating tokens/handling callbacks
+# We will adjust get_current_user and the callback logic
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/discord/token") # Placeholder, adjust if needed
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return encoded_jwt
+
+@app.get("/auth/discord/callback")
+async def auth_discord_callback(code: str, state: Optional[str] = None):
+    """
+    Handles the callback from Discord after user authorization.
+    Exchanges the authorization code for an access token and fetches user info.
+    """
+    token_url = 'https://discord.com/api/v10/oauth2/token'
+    payload = {
+        "client_id": settings.DISCORD_CLIENT_ID,
+        "client_secret": settings.DISCORD_CLIENT_SECRET,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": settings.DISCORD_REDIRECT_URI,
+    }
+
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded'
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            # 1. Exchange code for token
+            response = await client.post(token_url, data=payload, headers=headers)
+            if response.status_code != 200:
+                print(f"Error exchanging code: {response.status_code} {response.text}")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to exchange Discord code for token")
+            token_data = response.json()
+            access_token = token_data['access_token']
+
+            # 2. Get user info from Discord using the access token
+            user_info_url = 'https://discord.com/api/v10/users/@me'
+            headers = {'Authorization': f'Bearer {access_token}'}
+            response = await client.get(user_info_url, headers=headers)
+            if response.status_code != 200:
+                print(f"Error fetching user info: {response.status_code} {response.text}")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to fetch user info from Discord")
+            user_info = response.json()
+            user_id = user_info['id']
+
+            # 2.5. Get user's guilds (servers) from Discord
+            user_guilds_list: List[Dict[str, Any]] = []
+            guilds_url = settings.DISCORD_USER_GUILDS_URL
+            # OAuth headers are already defined as 'headers' variable with the Bearer token
+            guilds_response = await client.get(guilds_url, headers=headers) 
+            if guilds_response.status_code == 200:
+                raw_guilds_data = guilds_response.json()
+                for guild_data in raw_guilds_data:
+                    user_guilds_list.append({
+                        "id": guild_data["id"],
+                        "name": guild_data["name"],
+                        "icon": guild_data.get("icon")
+                    })
+                print(f"Fetched {len(user_guilds_list)} guilds for user {user_id}.") # Corrected: use user_id
+            else:
+                print(f"Warning: Failed to fetch guilds for user {user_id}. Status: {guilds_response.status_code} - {guilds_response.text}") # Corrected: use user_id
+
+            # 3. Upsert user in our database
+            # Construct avatar URL
+            avatar_hash = user_info.get("avatar")
+            avatar_full_url = None
+            if avatar_hash:
+                extension = "gif" if avatar_hash.startswith("a_") else "png"
+                avatar_full_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.{extension}?size=128"
+            
+            # Check if user already exists to preserve fields like servers/credits
+            existing_user_dict = await db_get_user(user_id)
+            
+            user_data_for_db = {
+                "user_id": user_id,
+                "username": user_info.get("username", f"User_{user_id[:6]}"),
+                "profile_picture_url": avatar_full_url,
+                # Preserve existing fields if user exists, otherwise initialize/update
+                "social_credits_given": existing_user_dict.get("social_credits_given", []) if existing_user_dict else [],
+                "servers": user_guilds_list if user_guilds_list else (existing_user_dict.get("servers", []) if existing_user_dict else []),
+                # Preserve API key info if user exists
+                "plugin_api_key": existing_user_dict.get("plugin_api_key") if existing_user_dict else None,
+                "plugin_api_key_generated_at": existing_user_dict.get("plugin_api_key_generated_at") if existing_user_dict else None
+            }
+
+            await db_upsert_user(user_data_for_db)
+
+            # 4. Create JWT token for our frontend
+            jwt_data = {"sub": user_id} # Using Discord user ID as subject
+            jwt_token = create_access_token(data=jwt_data)
+
+            # 5. Redirect user back to frontend with the JWT token
+            # Important: Do NOT put the token directly in the URL fragment like this in production.
+            # Use a more secure method like posting to a redirect handler page
+            # or using HttpOnly cookies if frontend and backend are same-site.
+            # For this example, we'll use a URL fragment.
+            redirect_url = f"{settings.FRONTEND_REDIRECT_URI}?token={jwt_token}" # Send token as query param
+            return RedirectResponse(url=redirect_url)
+
+        except httpx.HTTPStatusError as e:
+            # Log the error details from Discord if possible
+            error_detail = e.response.json() if e.response else str(e)
+            print(f"Discord API Error: {error_detail}") # Log to server console
+            raise HTTPException(status_code=e.response.status_code, detail=f"Error communicating with Discord: {str(error_detail)}")
+        except Exception as e:
+            print(f"Generic error in Discord callback: {e}") # Log to server console
+            raise HTTPException(status_code=500, detail=f"An unexpected error occurred during Discord authentication: {str(e)}")
+
+# Helper function to get current user from token
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    # Fetch user from DB instead of in-memory dict
+    user_dict = await db_get_user(user_id)
+    if user_dict is None:
+        print(f"User ID {user_id} from valid JWT not found in DB!") # Should not happen if OAuth callback works
+        # Optionally, try ensure_user_in_db here?
+        # Or just raise error, as user should exist post-login.
+        raise credentials_exception # Treat as invalid credentials if user vanished from DB
+    
+    # Remove sensitive/internal fields before returning
+    user_dict.pop('_id', None)
+    user_dict.pop('plugin_api_key', None) # Don't expose hash
+    
+    return User(**user_dict)
 
 # --- API Endpoints ---
 
@@ -261,144 +440,6 @@ async def auth_discord_login():
     discord_auth_url_with_params = f"{settings.DISCORD_AUTH_URL}?{urllib.parse.urlencode(params)}"
     return RedirectResponse(url=discord_auth_url_with_params)
 
-# OAuth2 scheme for Bearer token dependency
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token") # tokenUrl is not used directly by us here, but required
-
-# Helper function to create JWT access token
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
-    return encoded_jwt
-
-@app.get("/auth/discord/callback")
-async def auth_discord_callback(code: str, state: Optional[str] = None):
-    """
-    Handles the callback from Discord after user authorization.
-    Exchanges the authorization code for an access token and fetches user info.
-    """
-    token_data = {
-        "client_id": settings.DISCORD_CLIENT_ID,
-        "client_secret": settings.DISCORD_CLIENT_SECRET,
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": settings.DISCORD_REDIRECT_URI,
-        # "scope": "identify email guilds" # Not strictly needed for token exchange but good to remember
-    }
-
-    headers = {
-        'Content-Type': 'application/x-www-form-urlencoded'
-    }
-
-    async with httpx.AsyncClient() as client:
-        try:
-            # 1. Exchange code for access token
-            token_response = await client.post(settings.DISCORD_TOKEN_URL, data=token_data, headers=headers)
-            token_response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-            token_payload = token_response.json()
-            access_token = token_payload.get("access_token")
-            # refresh_token = token_payload.get("refresh_token") # Store this securely if needed for long-lived access
-            # expires_in = token_payload.get("expires_in")
-
-            if not access_token:
-                raise HTTPException(status_code=400, detail="Could not obtain access token from Discord")
-
-            # 2. Fetch user information from Discord using the access token
-            user_info_headers = {
-                "Authorization": f"Bearer {access_token}"
-            }
-            user_info_response = await client.get(settings.DISCORD_USER_INFO_URL, headers=user_info_headers)
-            user_info_response.raise_for_status()
-            user_info = user_info_response.json()
-
-            # 3. Fetch user's guilds (servers)
-            user_guilds_response = await client.get(settings.DISCORD_USER_GUILDS_URL, headers=user_info_headers)
-            user_guilds_response.raise_for_status()
-            guilds_info = user_guilds_response.json()
-            
-            user_servers_list: List[UserServerInfo] = []
-            for guild in guilds_info:
-                user_servers_list.append(UserServerInfo(
-                    id=guild["id"],
-                    name=guild["name"],
-                    icon=guild.get("icon")
-                ))
-
-            discord_id = user_info.get("id")
-            discord_username = user_info.get("username")
-            discord_avatar = user_info.get("avatar")
-            discord_email = user_info.get("email") # If email scope was granted and present
-
-            if not discord_id or not discord_username:
-                raise HTTPException(status_code=500, detail="Could not retrieve essential user info from Discord.")
-
-            # Upsert user in our mock database
-            profile_pic_url = f"https://cdn.discordapp.com/avatars/{discord_id}/{discord_avatar}.png" if discord_avatar else None
-            
-            if discord_id not in db_users:
-                app_user = User(
-                    user_id=discord_id, 
-                    username=discord_username, # Store base username
-                    profile_picture_url=profile_pic_url,
-                    social_credits_given=[],
-                    servers=user_servers_list
-                )
-                db_users[discord_id] = app_user
-                print(f"Added new user {discord_username} (ID: {discord_id}) to db_users from OAuth callback.")
-            else:
-                db_users[discord_id].username = discord_username # Update base username
-                db_users[discord_id].profile_picture_url = profile_pic_url
-                db_users[discord_id].servers = user_servers_list # Update servers list from OAuth
-                print(f"Updated user {discord_username} (ID: {discord_id}) in db_users from OAuth callback.")
-            
-            # Create JWT for our application session
-            access_token_expires = timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-            app_access_token = create_access_token(
-                data={"sub": discord_id, "username": discord_username}, 
-                expires_delta=access_token_expires
-            )
-            
-            # Redirect to frontend with the token
-            frontend_redirect_url = f"http://localhost:3000/auth/callback?token={app_access_token}"
-            # In a production app, you might get the frontend URL from settings as well.
-            return RedirectResponse(url=frontend_redirect_url)
-
-        except httpx.HTTPStatusError as e:
-            # Log the error details from Discord if possible
-            error_detail = e.response.json() if e.response else str(e)
-            print(f"Discord API Error: {error_detail}") # Log to server console
-            raise HTTPException(status_code=e.response.status_code, detail=f"Error communicating with Discord: {error_detail}")
-        except Exception as e:
-            print(f"Generic error in Discord callback: {e}") # Log to server console
-            raise HTTPException(status_code=500, detail=f"An unexpected error occurred during Discord authentication: {str(e)}")
-
-# Helper function to get current user from token
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-        user_id: str = payload.get("sub")
-        username: str = payload.get("username") # We can also get username if stored
-        if user_id is None or username is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    
-    user = db_users.get(user_id)
-    if user is None:
-        # This case should ideally not happen if JWTs are issued only for existing users
-        # Or, it could mean the user was deleted after the token was issued.
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return user
-
 # --- User Endpoints ---
 @app.get("/users/me", response_model=User)
 async def read_users_me(current_user: User = Depends(get_current_user)):
@@ -413,8 +454,9 @@ async def read_user_tracked_servers(current_user: User = Depends(get_current_use
     Get the list of servers the authenticated user has (initially fetched from Discord).
     In the future, this could be a list of servers the user explicitly tracks in this app.
     """
-    # For now, it returns all servers associated with the user from the initial fetch.
-    # Later, you might have a separate 'tracked_servers' list if users pick from their Discord servers.
+    # The current_user object fetched by dependency contains server info
+    # Need to make sure the User model loaded by get_current_user includes `servers`
+    # Assuming `get_user` retrieves the full user document including the `servers` array
     return current_user.servers
 
 @app.post("/users/{acting_user_id}/credit/{target_user_id}", response_model=UserSocialCreditTarget)
@@ -428,44 +470,63 @@ async def give_social_credit(
     if acting_user_id != current_user.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Path acting_user_id does not match authenticated user."
+            detail="Acting user ID does not match authenticated user"
         )
     
-    # Now, acting_user is the authenticated current_user object, already fetched from db_users
-    acting_user = current_user 
-    # No need to check if acting_user.user_id is in db_users, get_current_user already did that.
-    
-    if target_user_id not in db_users:
-        raise HTTPException(status_code=404, detail=f"Target user {target_user_id} not found")
-    
-    if acting_user.user_id == target_user_id:
-        raise HTTPException(status_code=400, detail="Users cannot give credit to themselves")
+    # Ensure target user exists in DB (create if not, using helper)
+    target_user_dict = await ensure_user_in_db(target_user_id)
+    if not target_user_dict:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Target user {target_user_id} could not be established.")
 
-    # Find if this acting_user already has a credit entry for target_user_id
-    credit_target_entry = None
-    for entry in acting_user.social_credits_given:
-        if entry.target_user_id == target_user_id:
-            credit_target_entry = entry
+    # Fetch the acting user's current data from DB (current_user is from JWT, might be slightly stale)
+    acting_user_dict = await db_get_user(acting_user_id)
+    if not acting_user_dict:
+        # Should not happen if get_current_user worked
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Authenticated user not found in DB.")
+
+    # Find or create the social credit target entry within the acting user's document
+    social_credits_given = acting_user_dict.get("social_credits_given", [])
+    target_entry = None
+    target_entry_index = -1
+    for i, entry in enumerate(social_credits_given):
+        if entry.get("target_user_id") == target_user_id:
+            target_entry = entry
+            target_entry_index = i
             break
-    
-    if not credit_target_entry:
-        credit_target_entry = UserSocialCreditTarget(target_user_id=target_user_id)
-        acting_user.social_credits_given.append(credit_target_entry)
 
-    # Determine the current score
-    current_score = 0.0
-    if credit_target_entry.scores_history:
-        current_score = credit_target_entry.scores_history[-1].score_value
-    
-    new_score = current_score + update_request.score_delta
+    # If no existing entry for this target, create a new one
+    if target_entry is None:
+        target_entry = {
+            "target_user_id": target_user_id,
+            "scores_history": []
+        }
+        social_credits_given.append(target_entry)
+        target_entry_index = len(social_credits_given) - 1 # It's now the last element
 
+    # Calculate the new absolute score
+    last_score = target_entry["scores_history"][-1]["score_value"] if target_entry["scores_history"] else 0
+    new_score = last_score + update_request.score_delta
+
+    # Create the new score history entry
     new_score_entry = ScoreEntry(
         score_value=new_score,
-        reason=update_request.reason
-    )
-    credit_target_entry.scores_history.append(new_score_entry)
-    
-    return credit_target_entry
+        reason=update_request.reason,
+        server_id=update_request.server_id,
+        channel_id=update_request.channel_id,
+        message_id=update_request.message_id,
+        message_content_snippet=update_request.message_content_snippet
+    ).model_dump() # Convert Pydantic model to dict for DB
+
+    # Append the new score entry to the history
+    target_entry["scores_history"].append(new_score_entry)
+
+    # Update the acting user's document in the database
+    # We need to update the specific element in the social_credits_given array
+    # or the whole array if it was newly created.
+    await db_upsert_user(acting_user_dict) # Upsert the whole user doc with updated credits
+
+    # Return the updated target entry (convert back to Pydantic model)
+    return UserSocialCreditTarget(**target_entry)
 
 @app.delete("/users/{acting_user_id}/credit/{target_user_id}/latest", response_model=UserSocialCreditTarget)
 async def delete_latest_social_credit_entry(
@@ -479,50 +540,39 @@ async def delete_latest_social_credit_entry(
     if acting_user_id != current_user.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Path acting_user_id does not match authenticated user."
+            detail="Acting user ID does not match authenticated user"
         )
 
-    acting_user = current_user
+    # Fetch the acting user's data
+    acting_user_dict = await db_get_user(acting_user_id)
+    if not acting_user_dict:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Acting user not found")
 
-    if target_user_id not in db_users:
-        raise HTTPException(status_code=404, detail=f"Target user {target_user_id} not found in db_users.")
+    social_credits_given = acting_user_dict.get("social_credits_given", [])
+    target_entry = None
+    target_entry_found = False
 
-    credit_target_entry = None
-    credit_target_entry_index = -1 # To potentially remove the entry if its history becomes empty
-    for i, entry in enumerate(acting_user.social_credits_given):
-        if entry.target_user_id == target_user_id:
-            credit_target_entry = entry
-            credit_target_entry_index = i
+    for entry in social_credits_given:
+        if entry.get("target_user_id") == target_user_id:
+            target_entry = entry
+            target_entry_found = True
             break
-    
-    if not credit_target_entry:
-        # No credit history exists at all for this pair. Nothing to delete.
-        # We need to construct a dummy UserSocialCreditTarget to satisfy the response_model
-        # or change the response_model to be Optional or allow a different success response.
-        # For simplicity with mock DB, let's return a dummy valid structure.
-        print(f"No credit history object found for target {target_user_id} from user {acting_user_id}. No action taken.")
-        return UserSocialCreditTarget(target_user_id=target_user_id, scores_history=[])
 
-    if not credit_target_entry.scores_history:
-        print(f"Score history is empty for target {target_user_id} from user {acting_user_id}. No action taken.")
-        return credit_target_entry # History is already empty
+    if not target_entry_found:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No credit history found for target user {target_user_id}")
 
-    # Remove the last entry
-    deleted_entry = credit_target_entry.scores_history.pop()
-    print(f"Deleted score entry: {deleted_entry} for target {target_user_id} from user {acting_user_id}")
+    if not target_entry.get("scores_history"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No score entries to delete")
 
-    # Optional: If history becomes empty after pop, remove the UserSocialCreditTarget object itself
-    if not credit_target_entry.scores_history and credit_target_entry_index != -1:
-        # To fully clean up, remove the UserSocialCreditTarget if its history is now empty.
-        # This prevents empty UserSocialCreditTarget objects from accumulating.
-        # Note: This modifies acting_user.social_credits_given list directly.
-        # acting_user.social_credits_given.pop(credit_target_entry_index) # This might be risky if list modified elsewhere
-        acting_user.social_credits_given = [ 
-            e for e in acting_user.social_credits_given if not (e.target_user_id == target_user_id and not e.scores_history)
-        ]
-        print(f"Removed empty score history object for target {target_user_id} from user {acting_user_id}.")
- 
-    return credit_target_entry
+    # Remove the last entry from the scores history
+    deleted_entry = target_entry["scores_history"].pop()
+    print(f"Deleted score entry: {deleted_entry}")
+
+    # Update the user document in the database
+    await db_upsert_user(acting_user_dict)
+
+    # Return the modified target entry
+    return UserSocialCreditTarget(**target_entry)
 
 @app.delete("/users/{acting_user_id}/tracking/{target_user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def untrack_user_and_delete_history(
@@ -537,73 +587,100 @@ async def untrack_user_and_delete_history(
     if acting_user_id != current_user.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Path acting_user_id does not match authenticated user."
+            detail="Acting user ID does not match authenticated user"
         )
 
-    acting_user = current_user
+    # Fetch the acting user's data
+    acting_user_dict = await db_get_user(acting_user_id)
+    if not acting_user_dict:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Acting user not found")
 
-    if target_user_id not in db_users:
-        # If the target user isn't even in the system, there's nothing to untrack regarding them.
-        # Return 204 as if the operation was successful but idempotent.
-        print(f"Attempted to untrack non-existent target user {target_user_id} by {acting_user_id}. No action needed.")
-        return # HTTP 204 No Content
+    social_credits_given = acting_user_dict.get("social_credits_given", [])
+    initial_length = len(social_credits_given)
 
-    # Find the index of the UserSocialCreditTarget to remove
-    entry_to_remove_index = -1
-    for i, entry in enumerate(acting_user.social_credits_given):
-        if entry.target_user_id == target_user_id:
-            entry_to_remove_index = i
-            break
-    
-    if entry_to_remove_index != -1:
-        removed_entry = acting_user.social_credits_given.pop(entry_to_remove_index)
-        print(f"User {acting_user_id} untracked user {target_user_id}. Removed score history: {removed_entry}")
-    else:
-        # No specific score history found for this target, so untracking is effectively already done in terms of scores.
-        print(f"User {acting_user_id} attempted to untrack user {target_user_id}, but no existing score history was found. No action taken.")
-    
-    # No body needed for a 204 response
-    return
+    # Filter out the entry for the target user
+    updated_social_credits = [entry for entry in social_credits_given if entry.get("target_user_id") != target_user_id]
+
+    if len(updated_social_credits) == initial_length:
+        # No entry was found for the target user, still return success (idempotent)
+        print(f"No tracking entry found for target {target_user_id} under user {acting_user_id}, no action needed.")
+        # Return 204 No Content implicitly
+        return
+
+    # Update the user's social credits list
+    acting_user_dict["social_credits_given"] = updated_social_credits
+
+    # Update the user document in the database
+    await db_upsert_user(acting_user_dict)
+
+    print(f"Removed tracking and history for target {target_user_id} by user {acting_user_id}")
+    # Return 204 No Content implicitly by FastAPI if no body is returned
+    return None
 
 @app.get("/servers", response_model=List[Server])
 async def get_servers():
-    return list(db_servers.values())
+    # This needs rethinking. How do we get *all* servers?
+    # Querying the entire collection might be inefficient for very large numbers of servers.
+    # For now, let's fetch all servers. Add pagination or filtering if performance becomes an issue.
+    if db is None: # Corrected check: Use 'is None'
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database not available")
+    
+    servers_cursor = db[settings.MONGODB_SERVER_COLLECTION].find()
+    servers_list = await servers_cursor.to_list(length=None) # Fetch all servers; use a sensible limit in production
+    # Remove MongoDB internal ID before returning
+    for server in servers_list:
+        server.pop('_id', None)
+    return [Server(**server) for server in servers_list]
 
 @app.get("/servers/{server_id}/users", response_model=List[User])
 async def get_server_users(server_id: str):
-    if server_id not in db_servers:
-        raise HTTPException(status_code=404, detail=f"Server {server_id} not found")
-    
-    server = db_servers[server_id]
-    user_objects = []
-    for user_id in server.user_ids:
-        if user_id in db_users:
-            user_objects.append(db_users[user_id])
-        else:
-            # This case should ideally not happen if data is consistent
-            print(f"Warning: User ID {user_id} found in server {server_id} but not in db_users.")
-    return user_objects
+    # Fetch the server document
+    server_dict = await db_get_server(server_id)
+    if not server_dict:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Server {server_id} not found")
+
+    user_ids = server_dict.get("user_ids", [])
+    if not user_ids:
+        return []
+
+    # Fetch user details for each user ID
+    # This can be inefficient (N+1 problem). Consider optimizing if needed.
+    # Need to import db here as well, or use a db connection from a dependency?
+    # Let's import db for now.
+    if db is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database not available")
+    users_cursor = db[settings.MONGODB_USER_COLLECTION].find({"user_id": {"$in": user_ids}})
+    users_list = await users_cursor.to_list(length=len(user_ids))
+    # Remove sensitive fields
+    for user in users_list:
+        user.pop('_id', None)
+        user.pop('plugin_api_key', None)
+    return [User(**user) for user in users_list]
 
 @app.get("/users/{user_id}/credit/given", response_model=List[UserSocialCreditTarget])
 async def get_social_credit_given_by_user(user_id: str):
-    if user_id not in db_users:
-        raise HTTPException(status_code=404, detail=f"User {user_id} not found")
-    return db_users[user_id].social_credits_given
+    """Get all social credit targets and histories initiated by a specific user."""
+    user_dict = await db_get_user(user_id)
+    if not user_dict:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found")
+    
+    social_credits_given = user_dict.get("social_credits_given", [])
+    # Convert list of dicts to list of Pydantic models
+    return [UserSocialCreditTarget(**entry) for entry in social_credits_given]
 
 @app.get("/users/{user_id}/credit/given/{target_user_id}", response_model=UserSocialCreditTarget)
 async def get_social_credit_given_to_target(user_id: str, target_user_id: str):
-    if user_id not in db_users:
-        raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+    """Get the specific social credit history for a target user, as rated by user_id."""
+    user_dict = await db_get_user(user_id)
+    if not user_dict:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User {user_id} not found")
+
+    social_credits_given = user_dict.get("social_credits_given", [])
+    for entry in social_credits_given:
+        if entry.get("target_user_id") == target_user_id:
+            return UserSocialCreditTarget(**entry)
     
-    acting_user = db_users[user_id]
-    for entry in acting_user.social_credits_given:
-        if entry.target_user_id == target_user_id:
-            return entry # Found existing history, return it
-    
-    # If loop finishes, no entry was found. Return a valid UserSocialCreditTarget with empty history.
-    print(f"No credit history found from user {user_id} to {target_user_id}. Returning empty history.")
-    return UserSocialCreditTarget(target_user_id=target_user_id, scores_history=[])
-    # raise HTTPException(status_code=404, detail=f"No credit history found from user {user_id} to {target_user_id}") # Old behavior
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No credit history found from user {user_id} for target {target_user_id}")
 
 # --- Discord Integration Endpoints (Simulated) ---
 
@@ -659,77 +736,112 @@ async def get_discord_user_profile(
     current_user: User = Depends(get_current_user) # To ensure the endpoint is used by authenticated app users
 ):
     """
-    Fetches a Discord user's public profile by their ID using the application's bot token,
-    and upserts them into the local db_users.
+    Fetches a detailed user profile from Discord API, potentially augmenting with local server info.
+    Always attempts to return *some* user data if the user exists or can be minimally created.
     """
-    if not settings.DISCORD_BOT_TOKEN:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Application bot token is not configured on the server."
-        )
+    # Ensure user exists locally (fetch/create minimal if not)
+    user_dict = await ensure_user_in_db(user_id_to_lookup)
 
+    # If ensure_user_in_db failed (e.g., DB error), it would return None
+    if not user_dict:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve or create user in database.")
+
+    # Try to fetch fresh full profile from Discord API for latest details
+    if not settings.DISCORD_BOT_TOKEN:
+        # If no bot token, return the potentially minimal data from our DB
+        print(f"No bot token. Returning stored data for {user_id_to_lookup}.")
+        return DiscordUserProfile(
+            id=user_dict['user_id'],
+            username=user_dict['username'],
+            discriminator="0000", # Placeholder
+            avatar_url=user_dict.get('profile_picture_url'),
+            associatedServerIds=[s['id'] for s in user_dict.get('servers', [])] # Extract server IDs
+        )
+        
     discord_api_url = f"https://discord.com/api/v10/users/{user_id_to_lookup}"
-    headers = {
-        "Authorization": f"Bot {settings.DISCORD_BOT_TOKEN}"
-    }
+    headers = {"Authorization": f"Bot {settings.DISCORD_BOT_TOKEN}"}
+    updated_user_profile = None
 
     async with httpx.AsyncClient() as client:
         try:
+            print(f"Attempting Discord API lookup for {user_id_to_lookup}...")
             response = await client.get(discord_api_url, headers=headers)
-            response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
             
-            user_data = response.json()
-            
-            avatar_hash = user_data.get("avatar")
-            user_id = user_data.get("id") # This is the ID of the user we looked up
-            username = user_data.get("username")
-            discriminator = user_data.get("discriminator") # Needed for constructing full username for display
-            
-            avatar_full_url = None
-            if avatar_hash and user_id:
-                extension = "gif" if avatar_hash.startswith("a_") else "png"
-                avatar_full_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.{extension}?size=128"
+            if response.status_code == 200:
+                print(f"Discord API success for {user_id_to_lookup}.")
+                user_data = response.json()
+                avatar_hash = user_data.get("avatar")
+                user_id = user_data.get("id")
+                username = user_data.get("username")
+                discriminator = user_data.get("discriminator")
+                
+                avatar_full_url = None
+                if avatar_hash and user_id:
+                    extension = "gif" if avatar_hash.startswith("a_") else "png"
+                    avatar_full_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.{extension}?size=128"
 
-            # Upsert this fetched user into our db_users
-            if user_id and username: # Ensure we have the basic info
-                if user_id not in db_users:
-                    db_users[user_id] = User(
-                        user_id=user_id,
-                        username=username, # Store base username
-                        profile_picture_url=avatar_full_url,
-                        servers=[],
-                        social_credits_given=[]
-                    )
-                    print(f"Added new user {username}#{discriminator} (ID: {user_id}) to db_users from direct lookup.")
-                else:
-                    # User exists, only update profile details from this specific lookup
-                    db_users[user_id].username = username # Update base username
-                    db_users[user_id].profile_picture_url = avatar_full_url
-                    # DO NOT overwrite .servers or .social_credits_given here
-                    print(f"Updated profile for user {username}#{discriminator} (ID: {user_id}) in db_users from direct lookup.")
-            
-            return DiscordUserProfile(
-                id=user_id if user_id else "Unknown ID",
-                username=username if username else "Unknown User",
-                discriminator=discriminator if discriminator else "0000",
-                avatar=avatar_hash,
-                avatar_url=avatar_full_url,
-                banner=user_data.get("banner"),
-                accent_color=user_data.get("accent_color"),
-                public_flags=user_data.get("public_flags")
-            )
+                # Prepare the profile object to return
+                updated_user_profile = DiscordUserProfile(
+                    id=user_id if user_id else user_id_to_lookup, # Fallback ID
+                    username=username if username else user_dict.get('username'), # Fallback username
+                    discriminator=discriminator if discriminator else "0000", # Fallback discriminator
+                    avatar=avatar_hash,
+                    avatar_url=avatar_full_url,
+                    banner=user_data.get("banner"),
+                    accent_color=user_data.get("accent_color"),
+                    public_flags=user_data.get("public_flags"),
+                    # Get associated servers from the current DB record
+                    associatedServerIds=[s['id'] for s in user_dict.get('servers', [])]
+                )
 
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                raise HTTPException(status_code=404, detail=f"Discord user with ID '{user_id_to_lookup}' not found.")
+                # Also, update our database record with the fresh info (if different)
+                db_update_data = {}
+                if username and username != user_dict.get('username'):
+                    db_update_data['username'] = username
+                if avatar_full_url != user_dict.get('profile_picture_url'): # Check if URL changed
+                    db_update_data['profile_picture_url'] = avatar_full_url
+                
+                if db_update_data:
+                    print(f"Updating DB for {user_id} with: {db_update_data}")
+                    await db_update_user_fields(user_id, db_update_data)
+            
+            elif response.status_code == 404:
+                print(f"Discord API returned 404 for {user_id_to_lookup}. User not found on Discord.")
+                # DO NOT raise HTTPException. We will return the existing minimal data.
+                pass # Fall through to return user_dict data
+            
             else:
-                # Log the error details from Discord if possible
-                error_detail = e.response.json() if e.response else str(e)
-                print(f"Discord API Error fetching user {user_id_to_lookup}: {error_detail}") # Log to server console
-                raise HTTPException(status_code=e.response.status_code, detail=f"Error communicating with Discord: {str(error_detail)}")
+                # Handle other non-200, non-404 errors from Discord
+                error_detail_text = response.text
+                print(f"Discord API Error ({response.status_code}) fetching user {user_id_to_lookup}: {error_detail_text}")
+                # Don't raise, but maybe log this more formally? Fall through to return user_dict data.
+                pass # Fall through
+
+        except httpx.RequestError as e:
+            # Network errors, timeouts etc.
+            print(f"HTTPX RequestError fetching user {user_id_to_lookup}: {e}")
+            # Fall through to return existing data
+            pass
         except Exception as e:
-            print(f"Generic error fetching user {user_id_to_lookup}: {e}") # Log to server console
-            raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+            # Other unexpected errors
+            print(f"Generic error during Discord fetch for {user_id_to_lookup}: {e}")
+            # Fall through to return existing data
+            pass
+
+    # If Discord fetch was successful and created an updated profile, return that
+    if updated_user_profile:
+        return updated_user_profile
+    else:
+        # If Discord fetch failed (404, other error, network issue) or was skipped (no token),
+        # return the profile constructed from the data we definitely have (from ensure_user_in_db)
+        print(f"Discord fetch failed or skipped for {user_id_to_lookup}. Returning data from DB.")
+        return DiscordUserProfile(
+            id=user_dict['user_id'],
+            username=user_dict['username'],
+            discriminator="0000", # Placeholder if Discord fetch failed
+            avatar_url=user_dict.get('profile_picture_url'),
+            associatedServerIds=[s['id'] for s in user_dict.get('servers', [])]
+        )
 
 @app.get("/discord/servers/{server_id}/members/{user_id_to_check}/is-member", response_model=GuildMemberStatus)
 async def check_guild_membership(
@@ -738,172 +850,321 @@ async def check_guild_membership(
     current_user: User = Depends(get_current_user) # Authenticated app user
 ):
     """
-    Checks if a given user ID is a member of a given server ID (guild ID).
-    Uses the application's bot token for the Discord API call.
+    Checks if a user is a member of a specific Discord server using the Bot.
     """
+    # Ensure the user being checked exists in our system (minimal check)
+    # We don't strictly *need* this for the Discord API call, but good practice
+    await ensure_user_in_db(user_id_to_check)
+
     if not settings.DISCORD_BOT_TOKEN:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Application bot token is not configured on the server for this operation."
-        )
+        print(f"Error checking membership for {user_id_to_check} in {server_id}: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error contacting Discord API")
 
-    discord_api_url = f"https://discord.com/api/v10/guilds/{server_id}/members/{user_id_to_check}"
-    headers = {
-        "Authorization": f"Bot {settings.DISCORD_BOT_TOKEN}"
-    }
-
-    async with httpx.AsyncClient() as client:
-        try:
-            print(f"BACKEND: Calling Discord API: {discord_api_url} for user {user_id_to_check} in server {server_id}") # LOG 1
-            response = await client.get(discord_api_url, headers=headers)
-            print(f"BACKEND: Discord API response status: {response.status_code} for user {user_id_to_check} in server {server_id}") # LOG 2
-            
-            if response.status_code == 200:
-                member_data = response.json()
-                username = member_data.get("user", {}).get("username", "Unknown")
-                nickname = member_data.get("nick")
-                print(f"BACKEND: User {user_id_to_check} IS member of {server_id}. Nick: {nickname}, User: {username}. Returning is_member=True.") # LOG 3
-                return GuildMemberStatus(
-                    server_id=server_id,
-                    user_id=user_id_to_check,
-                    is_member=True,
-                    username_in_server=nickname or username
-                )
-            elif response.status_code == 404: # User is not a member of the guild
-                print(f"BACKEND: User {user_id_to_check} NOT member of {server_id} (Discord 404). Returning is_member=False.") # LOG 4
-                return GuildMemberStatus(
-                    server_id=server_id,
-                    user_id=user_id_to_check,
-                    is_member=False
-                )
-            else:
-                error_text = "Unknown error structure"
-                try:
-                    error_text = response.text
-                except Exception:
-                    pass # Keep default error_text
-                print(f"BACKEND: Discord API returned other status {response.status_code} for user {user_id_to_check}. Content: {error_text}") # LOG 5
-                response.raise_for_status() 
-                # This part below is typically unreachable if raise_for_status() works as expected for client errors
-                return GuildMemberStatus(server_id=server_id, user_id=user_id_to_check, is_member=False, username_in_server="Discord API Error") 
-
-        except httpx.HTTPStatusError as e:
-            error_detail = "Unknown error structure"
-            try:
-                error_detail = e.response.text
-            except Exception:
-                pass # Keep default error_detail
-            print(f"BACKEND: HTTPStatusError checking membership for user {user_id_to_check} in server {server_id}: Status {e.response.status_code}, Detail: {error_detail}. Returning is_member=False.") # LOG 6
-            if e.response.status_code == 403:
-                 return GuildMemberStatus(server_id=server_id, user_id=user_id_to_check, is_member=False, username_in_server="Access Denied")
-            return GuildMemberStatus(server_id=server_id, user_id=user_id_to_check, is_member=False, username_in_server="Error Checking Status")
-        except Exception as e:
-            print(f"BACKEND: Generic error checking membership for user {user_id_to_check} in server {server_id}: {str(e)}. Returning is_member=False.") # LOG 7
-            return GuildMemberStatus(server_id=server_id, user_id=user_id_to_check, is_member=False, username_in_server="Generic Error")
+# --- User Plugin API Key Endpoints (Refactored for DB & Hashing) ---
 
 @app.get("/users/me/plugin-api-key-status", response_model_exclude_none=True)
 async def get_user_plugin_api_key_status(current_user: User = Depends(get_current_user)):
-    if current_user.plugin_api_key and current_user.plugin_api_key_generated_at:
-        return {
-            "has_key": True,
-            "generated_at": current_user.plugin_api_key_generated_at,
-            "key_preview": f"{current_user.plugin_api_key[:4]}...{current_user.plugin_api_key[-4:]}" # Show only a preview
-        }
-    return {"has_key": False}
+    """
+    Returns whether the user has an API key and when it was generated.
+    """
+    # Fetch the latest user data directly from DB to ensure freshness
+    user_dict = await db_get_user(current_user.user_id)
+    if not user_dict:
+        raise HTTPException(status_code=404, detail="User not found") # Should not happen
 
-@app.post("/users/me/plugin-api-key", response_model_exclude_none=True)
+    if user_dict.get("plugin_api_key"):
+        return {
+            "has_api_key": True,
+            "generated_at": user_dict.get("plugin_api_key_generated_at")
+        }
+    else:
+        return {"has_api_key": False}
+
+@app.post("/users/me/plugin-api-key", response_model=PluginApiKeyResponse)
 async def generate_user_plugin_api_key(current_user: User = Depends(get_current_user)):
-    new_key = secrets.token_urlsafe(32)
-    current_user.plugin_api_key = new_key
-    current_user.plugin_api_key_generated_at = datetime.now(timezone.utc)
-    # In a real DB, you'd save current_user here.
-    # For mock db_users, the object in the dict is updated by reference.
-    print(f"Generated new plugin API key for user {current_user.user_id}")
+    """
+    Generates a new API key for the user, replacing any existing one.
+    """
+    new_api_key = secrets.token_urlsafe(32) # Generate a secure random key
+    generated_at = datetime.now(timezone.utc)
+
+    # Update the key in the database (hashing is handled by the db function)
+    await db_update_user_api_key(current_user.user_id, new_api_key, generated_at)
+    
+    # IMPORTANT: Return the *plaintext* key to the user ONLY this one time.
+    # Do not store the plaintext key anywhere.
     return {
-        "message": "New Plugin API Key generated. Please copy it now, it will not be shown again.",
-        "plugin_api_key": new_key,
-        "generated_at": current_user.plugin_api_key_generated_at
+        "api_key": new_api_key,
+        "generated_at": generated_at
     }
 
 @app.delete("/users/me/plugin-api-key", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_user_plugin_api_key(current_user: User = Depends(get_current_user)):
-    if current_user.plugin_api_key:
-        print(f"Revoking plugin API key for user {current_user.user_id}")
-        current_user.plugin_api_key = None
-        current_user.plugin_api_key_generated_at = None
-    else:
-        print(f"No plugin API key to revoke for user {current_user.user_id}")
-    return # 204 No Content
+    """
+    Revokes the user's API key by removing it from the database.
+    """
+    # Fetch user data
+    user_dict = await db_get_user(current_user.user_id)
+    if not user_dict:
+        raise HTTPException(status_code=404, detail="User not found") # Should not happen
+       
+    # Set API key fields to None
+    user_dict['plugin_api_key'] = None
+    user_dict['plugin_api_key_generated_at'] = None
+    
+    # Update the user in the database
+    await db_upsert_user(user_dict)
+    
+    # Return 204 No Content
+    return None
 
 @app.post("/plugin/ratings", response_model=UserSocialCreditTarget, status_code=status.HTTP_201_CREATED)
 async def create_rating_from_plugin(
     rating_data: PluginRatingCreate,
-    authenticated_acting_user: User = Depends(get_authenticated_plugin_user) 
+    authenticated_acting_user: User = Depends(get_authenticated_plugin_user) # Already verified API key
 ):
-    print(f"PLUGIN_RATINGS: Start. Acting User from Dep: {authenticated_acting_user.user_id}, Target User from Body: {rating_data.target_user_id}") # LOG A
-
-    if rating_data.acting_user_id != authenticated_acting_user.user_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="acting_user_id in body does not match ID authenticated by plugin key/header.")
-    
-    acting_user = authenticated_acting_user 
+    """
+    Receives a rating submission from the Discord plugin.
+    """
+    acting_user_id = authenticated_acting_user.user_id
     target_user_id = rating_data.target_user_id
+    server_id = rating_data.server_id
+    channel_id = rating_data.channel_id
+    message_id = rating_data.message_id
+    score_delta = rating_data.score_delta
 
-    print(f"PLUGIN_RATINGS: Ensuring target user {target_user_id} in DB.") # LOG B
-    async with httpx.AsyncClient() as client: 
-        await ensure_user_in_db(target_user_id, client)
-    
-    if target_user_id not in db_users: 
-        print(f"PLUGIN_RATINGS: CRITICAL - Target user {target_user_id} NOT IN DB_USERS after ensure call.") # LOG C
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Target user could not be established in database after check.")
-    
-    print(f"PLUGIN_RATINGS: Target user {target_user_id} confirmed in db_users.") # LOG D
+    # Validate acting_user_id from token matches payload (redundant due to Depends? Good sanity check)
+    if acting_user_id != rating_data.acting_user_id:
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Authenticated user ID does not match acting_user_id in payload")
 
-    if acting_user.user_id == target_user_id:
-        raise HTTPException(status_code=400, detail="Users cannot give credit to themselves.")
+    # Ensure target user exists in DB (create if not, using helper)
+    target_user_dict = await ensure_user_in_db(target_user_id)
+    if not target_user_dict:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Target user {target_user_id} could not be established.")
 
-    print(f"PLUGIN_RATINGS: Looking for existing credit entry for target {target_user_id}.") # LOG E
-    credit_target_entry = None
-    # Ensure social_credits_given is a list, though Pydantic model should ensure this
-    if not isinstance(acting_user.social_credits_given, list):
-        acting_user.social_credits_given = [] 
-        print(f"PLUGIN_RATINGS: Corrected acting_user.social_credits_given to be a list for user {acting_user.user_id}")
+    # Fetch the acting user's current data from DB
+    # authenticated_acting_user is from get_authenticated_plugin_user, which uses db_get_user internally now
+    # but let's refetch to be sure we have the absolute latest for the update.
+    acting_user_dict = await db_get_user(acting_user_id)
+    if not acting_user_dict:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Authenticated user not found in DB.")
 
-    for entry_idx, entry in enumerate(acting_user.social_credits_given):
-        if entry.target_user_id == target_user_id:
-            credit_target_entry = entry
-            print(f"PLUGIN_RATINGS: Found existing credit entry.") # LOG F
-            break
-    
-    if not credit_target_entry:
-        print(f"PLUGIN_RATINGS: No existing credit entry found, creating new one for target {target_user_id}.") # LOG G
-        credit_target_entry = UserSocialCreditTarget(target_user_id=target_user_id, scores_history=[])
-        acting_user.social_credits_given.append(credit_target_entry)
-        print(f"PLUGIN_RATINGS: New credit entry appended. social_credits_given length: {len(acting_user.social_credits_given)}") # LOG H
-
-    current_score = 0.0
-    if credit_target_entry.scores_history: # This list should always exist due to UserSocialCreditTarget model
-        current_score = credit_target_entry.scores_history[-1].score_value
-        print(f"PLUGIN_RATINGS: Current score for {target_user_id} is {current_score}.") # LOG I
+    # --- Add Server Info --- 
+    # Check if this server is already associated with the acting user
+    server_known = False
+    if "servers" in acting_user_dict:
+        for server in acting_user_dict["servers"]:
+            if server.get("id") == server_id:
+                server_known = True
+                break
     else:
-        print(f"PLUGIN_RATINGS: No prior score history for {target_user_id}, current_score is 0.") # LOG J
-    
-    new_score = current_score + rating_data.score_delta
-    print(f"PLUGIN_RATINGS: New calculated score for {target_user_id} is {new_score}.") # LOG K
+         acting_user_dict["servers"] = [] # Initialize if missing
+
+    # If server is not known, fetch its details from Discord and add it
+    # (We need bot token for this)
+    if not server_known and settings.DISCORD_BOT_TOKEN:
+        print(f"Server {server_id} not tracked by user {acting_user_id}. Fetching info...")
+        guild_info_url = f"https://discord.com/api/v10/guilds/{server_id}"
+        headers = {"Authorization": f"Bot {settings.DISCORD_BOT_TOKEN}"}
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(guild_info_url, headers=headers)
+                if response.status_code == 200:
+                    guild_data = response.json()
+                    new_server_info = UserServerInfo(
+                        id=guild_data['id'],
+                        name=guild_data['name'],
+                        icon=guild_data.get('icon')
+                    ).model_dump()
+                    acting_user_dict["servers"].append(new_server_info)
+                    # No need to call upsert_server separately, user doc update handles it
+                    print(f"Added server {guild_data['name']} to user {acting_user_id}'s list.")
+                else:
+                    print(f"WARN: Failed to fetch info for server {server_id}. Status: {response.status_code}")
+                    # Optionally add a placeholder server entry?
+                    # acting_user_dict["servers"].append(UserServerInfo(id=server_id, name=f"Server {server_id[:6]}").model_dump())
+            except Exception as e:
+                print(f"WARN: Error fetching info for server {server_id}: {e}")
+    elif not server_known:
+         print(f"WARN: Cannot fetch info for server {server_id} as Bot Token is not configured.")
+         # Optionally add a placeholder server entry
+         # acting_user_dict["servers"].append(UserServerInfo(id=server_id, name=f"Server {server_id[:6]}").model_dump())
+
+    # --- Update Social Credit Score --- 
+    social_credits_given = acting_user_dict.get("social_credits_given", [])
+    target_entry = None
+    for entry in social_credits_given:
+        if entry.get("target_user_id") == target_user_id:
+            target_entry = entry
+            break
+
+    if target_entry is None:
+        target_entry = {"target_user_id": target_user_id, "scores_history": []}
+        social_credits_given.append(target_entry)
+
+    last_score = target_entry["scores_history"][-1]["score_value"] if target_entry["scores_history"] else 0
+    new_score = last_score + score_delta
 
     new_score_entry = ScoreEntry(
         score_value=new_score,
-        server_id=rating_data.server_id,
-        message_id=rating_data.message_id 
-    )
-    # Ensure scores_history list exists on credit_target_entry (Pydantic model default should handle this)
-    if not isinstance(credit_target_entry.scores_history, list):
-        credit_target_entry.scores_history = [] # Should not happen if model is used correctly
-        print(f"PLUGIN_RATINGS: Corrected credit_target_entry.scores_history to be a list for target {target_user_id}")
+        server_id=server_id,   # Add context from plugin
+        channel_id=channel_id, # Add context from plugin
+        message_id=message_id, # Add context from plugin
+        # timestamp added by default
+        # Reason is optional/not included per PluginRatingCreate model
+    ).model_dump()
 
-    credit_target_entry.scores_history.append(new_score_entry)
-    print(f"PLUGIN_RATINGS: Appended new score entry. History length: {len(credit_target_entry.scores_history)}") # LOG L
+    target_entry["scores_history"].append(new_score_entry)
+
+    # Update the acting user's document in the database with new score AND potentially new server
+    await db_upsert_user(acting_user_dict)
+
+    # Return the updated target entry
+    return UserSocialCreditTarget(**target_entry)
+
+@app.get("/users/{acting_user_id}/rated-users", response_model=List[DiscordUserProfile])
+async def get_rated_users(
+    acting_user_id: str,
+    current_user: User = Depends(get_current_user) # Authenticated user
+):
+    """
+    Gets profiles of all users that the acting_user_id has rated.
+    """
+    if acting_user_id != current_user.user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot fetch rated users for another user")
+
+    # Fetch the acting user's data from DB
+    acting_user_dict = await db_get_user(acting_user_id)
+    if not acting_user_dict:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Acting user not found")
+
+    social_credits_given = acting_user_dict.get("social_credits_given", [])
+    # target_user_ids = {entry["target_user_id"] for entry in social_credits_given if "target_user_id" in entry}
+
+    # if not target_user_ids:
+    #     return []
     
-    return credit_target_entry
+    rated_user_profiles = []
+    # Iterate through each user the acting_user has rated
+    for credit_entry in social_credits_given:
+        target_id = credit_entry.get("target_user_id")
+        if not target_id:
+            continue
+
+        # Collect unique server_ids from this target_id's score history within this credit_entry
+        associated_server_ids_for_this_target = set()
+        if "scores_history" in credit_entry:
+            for score_entry in credit_entry["scores_history"]:
+                if score_entry.get("server_id"):
+                    associated_server_ids_for_this_target.add(score_entry["server_id"])
+        
+        # Fetch the profile for this target_id
+        target_user_dict = await db_get_user(target_id)
+        profile = None
+        if target_user_dict:
+            # Construct profile from DB data
+             profile = DiscordUserProfile(
+                id=target_user_dict['user_id'],
+                username=target_user_dict['username'],
+                discriminator="0000", # Placeholder
+                avatar_url=target_user_dict.get('profile_picture_url'),
+                # Use the server IDs collected from the specific rating history
+                associatedServerIds=list(associated_server_ids_for_this_target) 
+            )
+        else:
+            # If target user isn't in DB yet (e.g., only rated via plugin, never logged in)
+            # try fetching basic info via ensure_user_in_db to at least get a username
+            # ensure_user_in_db itself doesn't populate associatedServerIds in this context
+            fetched_dict = await ensure_user_in_db(target_id)
+            if fetched_dict:
+                 profile = DiscordUserProfile(
+                    id=fetched_dict['user_id'],
+                    username=fetched_dict['username'],
+                    discriminator="0000", # Placeholder
+                    avatar_url=fetched_dict.get('profile_picture_url'),
+                    associatedServerIds=list(associated_server_ids_for_this_target)
+                )
+            else: # Fallback if ensure_user_in_db also fails to find/create them
+                 profile = DiscordUserProfile(
+                    id=target_id,
+                    username=f"User_{target_id[:6]}",
+                    discriminator="0000",
+                    associatedServerIds=list(associated_server_ids_for_this_target)
+                 )
+        
+        if profile:
+            rated_user_profiles.append(profile)
+
+    return rated_user_profiles
+
+# --- New Endpoint for Message Fetching ---
+class DiscordMessage(BaseModel):
+    id: str
+    content: str
+    author_username: str # Combine username#discriminator or just username
+    timestamp: datetime
+    # Add other fields if needed (e.g., author_id, embeds)
+
+@app.get("/discord/channels/{channel_id}/messages/{message_id}", response_model=DiscordMessage)
+async def get_discord_message_content(
+    channel_id: str = Path(..., title="The ID of the Discord channel"),
+    message_id: str = Path(..., title="The ID of the Discord message"),
+    current_user: User = Depends(get_current_user) # Ensure only logged-in users can fetch
+):
+    """
+    Fetches a specific message's content from Discord API using the Bot Token.
+    Requires channel_id and message_id.
+    """
+    if not settings.DISCORD_BOT_TOKEN:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Discord Bot Token not configured, cannot fetch message.")
+
+    discord_api_url = f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}"
+    headers = {"Authorization": f"Bot {settings.DISCORD_BOT_TOKEN}"}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            print(f"Fetching message {message_id} from channel {channel_id}...")
+            response = await client.get(discord_api_url, headers=headers)
+
+            if response.status_code == 200:
+                message_data = response.json()
+                author = message_data.get('author', {})
+                author_name = author.get('username', 'Unknown User')
+                discriminator = author.get('discriminator', '0000')
+                full_author_name = f"{author_name}#{discriminator}" if discriminator and discriminator != "0" else author_name
+
+                # Parse timestamp safely
+                timestamp_str = message_data.get('timestamp')
+                message_timestamp = datetime.now(timezone.utc) # Default fallback
+                if timestamp_str:
+                    try:
+                        message_timestamp = datetime.fromisoformat(timestamp_str)
+                    except ValueError:
+                        print(f"Warning: Could not parse timestamp '{timestamp_str}' for message {message_id}")
+                        # Keep default timestamp
+
+                return DiscordMessage(
+                    id=message_data.get('id', message_id),
+                    content=message_data.get('content', '(No content or fetch error)'),
+                    author_username=full_author_name,
+                    timestamp=message_timestamp
+                )
+            elif response.status_code == 404:
+                raise HTTPException(status_code=404, detail="Message not found on Discord (or bot lacks access).")
+            elif response.status_code == 403:
+                 raise HTTPException(status_code=403, detail="Bot lacks permissions to access this channel/message.")
+            else:
+                # Handle other errors
+                error_detail_text = response.text
+                print(f"Discord API Error ({response.status_code}) fetching message {message_id}: {error_detail_text}")
+                raise HTTPException(status_code=response.status_code, detail=f"Failed to fetch message from Discord: {error_detail_text}")
+
+        except httpx.RequestError as e:
+            print(f"HTTPX RequestError fetching message {message_id}: {e}")
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Network error contacting Discord: {e}")
+        except Exception as e:
+            print(f"Generic error fetching message {message_id}: {e}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while fetching the message.")
 
 # MONGO_URI = "mongodb://localhost:27017/"
 # client = MongoClient(MONGO_URI)
