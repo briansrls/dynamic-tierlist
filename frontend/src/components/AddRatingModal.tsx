@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile } from './UserSearch'; // Assuming UserProfile is exported here
 import '../App.css'; // For modal styling
 
@@ -14,6 +14,27 @@ const AddRatingModal: React.FC<AddRatingModalProps> = ({ isOpen, onClose, target
   const [scoreDelta, setScoreDelta] = useState<string>(''); // Store as string to allow +/- and easier input
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const scoreInputRef = useRef<HTMLInputElement>(null); // Create a ref for the score input
+
+  // Effect to focus the score input when the modal opens
+  useEffect(() => {
+    if (isOpen && scoreInputRef.current) {
+      // Slight delay to ensure the input is rendered and focusable, especially if there are open animations
+      const timer = setTimeout(() => {
+        scoreInputRef.current?.focus();
+      }, 100); // Adjust delay if needed, 0 might work too sometimes
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen]); // Dependency: run when isOpen changes
+
+  // Clear form when modal is closed or targetUser changes (if modal re-used for different users without closing)
+  useEffect(() => {
+    if (!isOpen) {
+      setScoreDelta('');
+      setReason('');
+      setError(null);
+    }
+  }, [isOpen]);
 
   if (!isOpen || !targetUser || !actingUserId) {
     return null;
@@ -23,7 +44,10 @@ const AddRatingModal: React.FC<AddRatingModalProps> = ({ isOpen, onClose, target
     e.preventDefault();
     setError(null);
 
-    const numericScoreDelta = parseFloat(scoreDelta);
+    // Remove commas before parsing
+    const cleanedScoreDeltaString = scoreDelta.replace(/,/g, '');
+    const numericScoreDelta = parseFloat(cleanedScoreDeltaString);
+
     if (isNaN(numericScoreDelta)) {
       setError('Score delta must be a valid number.');
       return;
@@ -54,6 +78,7 @@ const AddRatingModal: React.FC<AddRatingModalProps> = ({ isOpen, onClose, target
           <div className="form-group">
             <label htmlFor="scoreDelta">Score Change (+/-):</label>
             <input
+              ref={scoreInputRef} // Attach the ref to the input element
               type="text" // Changed to text to easily allow +/- prefixes
               id="scoreDelta"
               value={scoreDelta}

@@ -10,6 +10,7 @@ export interface UserProfile {
   banner?: string | null;
   accent_color?: number | null;
   public_flags?: number | null;
+  associatedServerIds?: string[]; // New: IDs of servers this user is associated with in this app
 }
 
 interface UserSearchProps {
@@ -107,7 +108,7 @@ const UserSearch: React.FC<UserSearchProps> = ({ selectedServerId, onTrackUser }
         <div className="user-search-no-results">User not found or ID is invalid.</div>
       )}
       {foundUser && (
-        <div className="user-search-result-item"> {/* Reusing class, but it's a single item now */}
+        <div className="user-search-result-item">
           <img
             src={foundUser.avatar_url || 'https://cdn.discordapp.com/embed/avatars/0.png'}
             alt={`${foundUser.username}'s avatar`}
@@ -123,4 +124,4 @@ const UserSearch: React.FC<UserSearchProps> = ({ selectedServerId, onTrackUser }
   );
 };
 
-export default UserSearch; 
+export default UserSearch;

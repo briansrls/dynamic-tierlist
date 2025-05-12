@@ -174,31 +174,45 @@ const mockScoreFallbackData: ScoreEntry[] = [
 ];
 
 interface ScoreGraphProps {
-  data: ScoreEntry[] | MultiLineGraphDataPoint[]; // Can be single or multi-line data
+  data: ScoreEntry[] | MultiLineGraphDataPoint[];
   graphTitle?: string;
-  lineConfigs?: LineConfig[]; // Optional for multi-line, if not provided, assumes single line
-  overallMinScore?: number; // Added for multi-line mode
-  overallMaxScore?: number; // Added for multi-line mode
+  lineConfigs?: LineConfig[];
+  overallMinScore?: number;
+  overallMaxScore?: number;
+  isLoading?: boolean;
+  error?: string | null; // Added error prop
 }
 
-const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, overallMinScore, overallMaxScore }) => {
-  // Determine if data is for multi-line based on lineConfigs or data structure
+const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, overallMinScore, overallMaxScore, isLoading, error }) => {
   const isMultiLine = lineConfigs && lineConfigs.length > 0;
-
-  // Use a type guard for safety, though structure of data also implies its type
   const displayData = data as (ScoreEntry[] | MultiLineGraphDataPoint[]);
-  console.log("ScoreGraph displayData:", JSON.stringify(displayData)); // Log the data
-
   const effectiveTitle = graphTitle || (isMultiLine ? "Tracked Users Overview" : "Score History");
 
-  if (!displayData || displayData.length === 0) {
+  // Order of precedence: Error, then Loading, then No Data, then Chart
+  if (error) {
     return (
-      <div className="score-graph-container" style={{ width: '100%', height: 550, textAlign: 'center', paddingTop: '20px' }}>
+      <div className="score-graph-container" style={{ width: '100%', height: 550 }}>
         <h3>{effectiveTitle}</h3>
-        <p>No score data available to display.</p>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 'calc(500px - 40px - 30px)', padding: '20px' }} className="graph-error-internal">
+          <p>Error loading scores:</p>
+          <p style={{ color: '#f04747', marginTop: '5px' }}>{error}</p>
+        </div>
       </div>
     );
   }
+
+  if (isLoading) {
+    return (
+      <div className="score-graph-container" style={{ width: '100%', height: 550 }}>
+        <h3>{effectiveTitle}</h3>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 'calc(500px - 40px - 30px)' }}>
+          <div className="css-spinner"></div>
+        </div>
+      </div>
+    );
+  }
+
+  const noDataAvailable = !displayData || displayData.length === 0;
 
   // Tooltip formatter needs to be aware of multi-line context
   const tooltipFormatter = (value: number, name: string, item: Payload<number, string>) => {
@@ -225,129 +239,134 @@ const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, 
     <div className="score-graph-container" style={{ width: '100%', height: 550 }}>
       <h3>{effectiveTitle}</h3>
       <ResponsiveContainer width="100%" height={500} style={{ overflow: 'visible' }}>
-        <LineChart
-          data={displayData}
-          margin={{ top: 40, right: 40, left: 10, bottom: 40 }}
-        >
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis
-            dataKey="timestamp"
-            tickFormatter={(numericalTimestamp) => {
-              if (typeof numericalTimestamp !== 'number') return '';
-              try {
-                const date = new Date(numericalTimestamp);
-                if (displayData.length > 1) {
-                  // Assuming timestamp is number for both ScoreEntry and MultiLineGraphDataPoint
-                  const firstTs = (displayData[0] as any).timestamp;
-                  const lastTs = (displayData[displayData.length - 1] as any).timestamp;
-                  if (Math.abs(lastTs - firstTs) < 3 * 24 * 60 * 60 * 1000) {
-                    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        {noDataAvailable ? (
+          <div style={{ textAlign: 'center', paddingTop: '100px', color: '#8e9297', height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+            <p>No score data available to display.</p>
+          </div>
+        ) : (
+          <LineChart
+            data={displayData}
+            margin={{ top: 40, right: 40, left: 10, bottom: 40 }}
+          >
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis
+              dataKey="timestamp"
+              tickFormatter={(numericalTimestamp) => {
+                if (typeof numericalTimestamp !== 'number') return '';
+                try {
+                  const date = new Date(numericalTimestamp);
+                  if (displayData.length > 1) {
+                    // Assuming timestamp is number for both ScoreEntry and MultiLineGraphDataPoint
+                    const firstTs = (displayData[0] as any).timestamp;
+                    const lastTs = (displayData[displayData.length - 1] as any).timestamp;
+                    if (Math.abs(lastTs - firstTs) < 3 * 24 * 60 * 60 * 1000) {
+                      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                    }
                   }
+                  return date.toLocaleDateString([], { year: '2-digit', month: 'short', day: 'numeric' });
+                } catch (e) {
+                  return 'Invalid Date';
                 }
-                return date.toLocaleDateString([], { year: '2-digit', month: 'short', day: 'numeric' });
-              } catch (e) {
-                return 'Invalid Date';
-              }
-            }}
-            domain={['dataMin', 'dataMax']}
-            type="number"
-            scale="time"
-          />
-          {/* For multi-line, YAxis might need dynamic domain or multiple axes, for now, single YAxis for scores */}
-          <YAxis
-            type="number"
-            domain={[
-              (dataMinFromData: number, dataMaxFromData: number) => {
-                if (isMultiLine && typeof overallMinScore === 'number' && typeof overallMaxScore === 'number') {
-                  const range = Math.max(1, Math.abs(overallMaxScore - overallMinScore));
+              }}
+              domain={['dataMin', 'dataMax']}
+              type="number"
+              scale="time"
+            />
+            {/* For multi-line, YAxis might need dynamic domain or multiple axes, for now, single YAxis for scores */}
+            <YAxis
+              type="number"
+              domain={[
+                (dataMinFromData: number, dataMaxFromData: number) => {
+                  if (isMultiLine && typeof overallMinScore === 'number' && typeof overallMaxScore === 'number') {
+                    const range = Math.max(1, Math.abs(overallMaxScore - overallMinScore));
+                    const padding = Math.max(range * 0.15, 20);
+                    const paddedMin = Math.min(overallMinScore, 0) - padding;
+                    return roundToNiceNumber(paddedMin, false); // Round down
+                  }
+                  if (typeof dataMinFromData !== 'number' || typeof dataMaxFromData !== 'number' || isNaN(dataMinFromData) || isNaN(dataMaxFromData)) {
+                    return -10;
+                  }
+                  const range = Math.max(1, Math.abs(dataMaxFromData - dataMinFromData));
                   const padding = Math.max(range * 0.15, 20);
-                  const paddedMin = Math.min(overallMinScore, 0) - padding;
+                  const paddedMin = Math.min(dataMinFromData, 0) - padding;
                   return roundToNiceNumber(paddedMin, false); // Round down
-                }
-                if (typeof dataMinFromData !== 'number' || typeof dataMaxFromData !== 'number' || isNaN(dataMinFromData) || isNaN(dataMaxFromData)) {
-                  return -10;
-                }
-                const range = Math.max(1, Math.abs(dataMaxFromData - dataMinFromData));
-                const padding = Math.max(range * 0.15, 20);
-                const paddedMin = Math.min(dataMinFromData, 0) - padding;
-                return roundToNiceNumber(paddedMin, false); // Round down
-              },
-              (dataMinFromData: number, dataMaxFromData: number) => {
-                if (isMultiLine && typeof overallMinScore === 'number' && typeof overallMaxScore === 'number') {
-                  const range = Math.max(1, Math.abs(overallMaxScore - overallMinScore));
+                },
+                (dataMinFromData: number, dataMaxFromData: number) => {
+                  if (isMultiLine && typeof overallMinScore === 'number' && typeof overallMaxScore === 'number') {
+                    const range = Math.max(1, Math.abs(overallMaxScore - overallMinScore));
+                    const padding = Math.max(range * 0.15, 20);
+                    const paddedMax = overallMaxScore + padding;
+                    return roundToNiceNumber(paddedMax, true); // Round up
+                  }
+                  if (typeof dataMinFromData !== 'number' || typeof dataMaxFromData !== 'number' || isNaN(dataMinFromData) || isNaN(dataMaxFromData)) {
+                    return 100;
+                  }
+                  const range = Math.max(1, Math.abs(dataMaxFromData - dataMinFromData));
                   const padding = Math.max(range * 0.15, 20);
-                  const paddedMax = overallMaxScore + padding;
+                  const paddedMax = dataMaxFromData + padding;
                   return roundToNiceNumber(paddedMax, true); // Round up
                 }
-                if (typeof dataMinFromData !== 'number' || typeof dataMaxFromData !== 'number' || isNaN(dataMinFromData) || isNaN(dataMaxFromData)) {
-                  return 100;
+              ]}
+              allowDataOverflow
+              dataKey={!isMultiLine ? "score_value" : undefined}
+            />
+            <Tooltip
+              labelFormatter={(numericalTimestamp: number) => {
+                if (typeof numericalTimestamp !== 'number') return '';
+                try {
+                  const date = new Date(numericalTimestamp);
+                  return date.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                } catch (e) {
+                  return 'Invalid Date';
                 }
-                const range = Math.max(1, Math.abs(dataMaxFromData - dataMinFromData));
-                const padding = Math.max(range * 0.15, 20);
-                const paddedMax = dataMaxFromData + padding;
-                return roundToNiceNumber(paddedMax, true); // Round up
-              }
-            ]}
-            allowDataOverflow
-            dataKey={!isMultiLine ? "score_value" : undefined}
-          />
-          <Tooltip
-            labelFormatter={(numericalTimestamp: number) => {
-              if (typeof numericalTimestamp !== 'number') return '';
-              try {
-                const date = new Date(numericalTimestamp);
-                return date.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-              } catch (e) {
-                return 'Invalid Date';
-              }
-            }}
-            formatter={tooltipFormatter}
-          />
-          <Legend />
-          {isMultiLine && lineConfigs ? (
-            lineConfigs.map(config => (
+              }}
+              formatter={tooltipFormatter}
+            />
+            <Legend />
+            {isMultiLine && lineConfigs ? (
+              lineConfigs.map(config => (
+                <Line
+                  key={config.dataKey}
+                  type="monotone"
+                  dataKey={config.dataKey}
+                  stroke={config.stroke}
+                  name={config.name}
+                  connectNulls={true}
+                  activeDot={(activeDotProps: any) => (
+                    <CustomActiveDot {...activeDotProps} avatarUrl={config.avatarUrl} />
+                  )}
+                  dot={(lineProps: any) => {
+                    const { key, index, ...restOfDotProps } = lineProps;
+                    const uniqueKey = key || `custom-dot-${config.dataKey}-${index}`;
+                    // console.log(`ScoreGraph: dot render func called for line ${config.dataKey}, point index ${index}, uniqueKey ${uniqueKey}`);
+                    return (
+                      <CustomLastPointDot
+                        key={uniqueKey}
+                        {...restOfDotProps}
+                        avatarUrl={config.avatarUrl}
+                        dataKey={config.dataKey}
+                        data={displayData}
+                        index={index}
+                      />
+                    );
+                  }}
+                  strokeWidth={2}
+                />
+              ))
+            ) : (
               <Line
-                key={config.dataKey}
                 type="monotone"
-                dataKey={config.dataKey}
-                stroke={config.stroke}
-                name={config.name}
+                dataKey="score_value"
+                stroke="#8884d8"
                 connectNulls={true}
-                activeDot={(activeDotProps: any) => (
-                  <CustomActiveDot {...activeDotProps} avatarUrl={config.avatarUrl} />
-                )}
-                dot={(lineProps: any) => {
-                  const { key, index, ...restOfDotProps } = lineProps;
-                  const uniqueKey = key || `custom-dot-${config.dataKey}-${index}`;
-                  console.log(`ScoreGraph: dot render func called for line ${config.dataKey}, point index ${index}, uniqueKey ${uniqueKey}`);
-                  return (
-                    <CustomLastPointDot
-                      key={uniqueKey}
-                      {...restOfDotProps}
-                      avatarUrl={config.avatarUrl}
-                      dataKey={config.dataKey}
-                      data={displayData}
-                      index={index}
-                    />
-                  );
-                }}
+                activeDot={{ r: 6 }}
+                name="Score"
+                dot={{ r: 3 }}
                 strokeWidth={2}
               />
-            ))
-          ) : (
-            // Fallback to single line if no lineConfigs or not multi-line
-            <Line
-              type="monotone"
-              dataKey="score_value"
-              stroke="#8884d8"
-              connectNulls={true}
-              activeDot={{ r: 6 }}
-              name="Score"
-              dot={{ r: 3 }}
-              strokeWidth={2}
-            />
-          )}
-        </LineChart>
+            )}
+          </LineChart>
+        )}
       </ResponsiveContainer>
     </div>
   );

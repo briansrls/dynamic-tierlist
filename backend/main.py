@@ -376,6 +376,104 @@ async def give_social_credit(
     
     return credit_target_entry
 
+@app.delete("/users/{acting_user_id}/credit/{target_user_id}/latest", response_model=UserSocialCreditTarget)
+async def delete_latest_social_credit_entry(
+    acting_user_id: str, 
+    target_user_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Deletes the most recent score entry given by the acting_user to the target_user.
+    """
+    if acting_user_id != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Path acting_user_id does not match authenticated user."
+        )
+
+    acting_user = current_user
+
+    if target_user_id not in db_users:
+        raise HTTPException(status_code=404, detail=f"Target user {target_user_id} not found in db_users.")
+
+    credit_target_entry = None
+    credit_target_entry_index = -1 # To potentially remove the entry if its history becomes empty
+    for i, entry in enumerate(acting_user.social_credits_given):
+        if entry.target_user_id == target_user_id:
+            credit_target_entry = entry
+            credit_target_entry_index = i
+            break
+    
+    if not credit_target_entry:
+        # No credit history exists at all for this pair. Nothing to delete.
+        # We need to construct a dummy UserSocialCreditTarget to satisfy the response_model
+        # or change the response_model to be Optional or allow a different success response.
+        # For simplicity with mock DB, let's return a dummy valid structure.
+        print(f"No credit history object found for target {target_user_id} from user {acting_user_id}. No action taken.")
+        return UserSocialCreditTarget(target_user_id=target_user_id, scores_history=[])
+
+    if not credit_target_entry.scores_history:
+        print(f"Score history is empty for target {target_user_id} from user {acting_user_id}. No action taken.")
+        return credit_target_entry # History is already empty
+
+    # Remove the last entry
+    deleted_entry = credit_target_entry.scores_history.pop()
+    print(f"Deleted score entry: {deleted_entry} for target {target_user_id} from user {acting_user_id}")
+
+    # Optional: If history becomes empty after pop, remove the UserSocialCreditTarget object itself
+    if not credit_target_entry.scores_history and credit_target_entry_index != -1:
+        # To fully clean up, remove the UserSocialCreditTarget if its history is now empty.
+        # This prevents empty UserSocialCreditTarget objects from accumulating.
+        # Note: This modifies acting_user.social_credits_given list directly.
+        # acting_user.social_credits_given.pop(credit_target_entry_index) # This might be risky if list modified elsewhere
+        acting_user.social_credits_given = [ 
+            e for e in acting_user.social_credits_given if not (e.target_user_id == target_user_id and not e.scores_history)
+        ]
+        print(f"Removed empty score history object for target {target_user_id} from user {acting_user_id}.")
+ 
+    return credit_target_entry
+
+@app.delete("/users/{acting_user_id}/tracking/{target_user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def untrack_user_and_delete_history(
+    acting_user_id: str,
+    target_user_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Removes the entire social credit history given by the acting_user to the target_user,
+    effectively "untracking" them from the acting_user's perspective in terms of scores.
+    """
+    if acting_user_id != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Path acting_user_id does not match authenticated user."
+        )
+
+    acting_user = current_user
+
+    if target_user_id not in db_users:
+        # If the target user isn't even in the system, there's nothing to untrack regarding them.
+        # Return 204 as if the operation was successful but idempotent.
+        print(f"Attempted to untrack non-existent target user {target_user_id} by {acting_user_id}. No action needed.")
+        return # HTTP 204 No Content
+
+    # Find the index of the UserSocialCreditTarget to remove
+    entry_to_remove_index = -1
+    for i, entry in enumerate(acting_user.social_credits_given):
+        if entry.target_user_id == target_user_id:
+            entry_to_remove_index = i
+            break
+    
+    if entry_to_remove_index != -1:
+        removed_entry = acting_user.social_credits_given.pop(entry_to_remove_index)
+        print(f"User {acting_user_id} untracked user {target_user_id}. Removed score history: {removed_entry}")
+    else:
+        # No specific score history found for this target, so untracking is effectively already done in terms of scores.
+        print(f"User {acting_user_id} attempted to untrack user {target_user_id}, but no existing score history was found. No action taken.")
+    
+    # No body needed for a 204 response
+    return
+
 @app.get("/servers", response_model=List[Server])
 async def get_servers():
     return list(db_servers.values())
@@ -409,8 +507,12 @@ async def get_social_credit_given_to_target(user_id: str, target_user_id: str):
     acting_user = db_users[user_id]
     for entry in acting_user.social_credits_given:
         if entry.target_user_id == target_user_id:
-            return entry
-    raise HTTPException(status_code=404, detail=f"No credit history found from user {user_id} to {target_user_id}")
+            return entry # Found existing history, return it
+    
+    # If loop finishes, no entry was found. Return a valid UserSocialCreditTarget with empty history.
+    print(f"No credit history found from user {user_id} to {target_user_id}. Returning empty history.")
+    return UserSocialCreditTarget(target_user_id=target_user_id, scores_history=[])
+    # raise HTTPException(status_code=404, detail=f"No credit history found from user {user_id} to {target_user_id}") # Old behavior
 
 # --- Discord Integration Endpoints (Simulated) ---
 

@@ -525,6 +525,64 @@
   flex-grow: 1;
   color: #dcddde; /* Standard text color */
   font-size: 15px;
+  margin-right: 10px; /* Add some space before icons/buttons */
+}
+
+.tracked-user-server-icons {
+  display: flex;
+  align-items: center;
+  /* margin-left: auto; */ /* If you want to push it right before actions, but username is flex-grow */
+  margin-right: 10px; /* Space before action buttons */
+}
+
+.server-icon-display {
+  width: 24px; 
+  height: 24px;
+  border-radius: 25%; 
+  margin-left: 4px; 
+  display: flex; /* Changed to flex for better centering of all content types */
+  align-items: center;
+  justify-content: center;
+  background-color: #202225; 
+  overflow: hidden; 
+  color: #fff;
+  /* font-size: 14px; Removed from here, will be specific to text/emoji */
+}
+
+.server-icon-display img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* For EMOJIS like 🌍, 📍 in the .server-icon-display (tracked users list) */
+.server-icon-display .global-icon-placeholder {
+  font-size: 12px; /* Current best guess for size */
+  line-height: 1;   
+  position: relative; /* Enable nudging */
+  top: -1px;          /* Nudge UP by 1px */
+}
+
+/* Styles for the LARGE globe emoji in the main ServerList */
+.server-list-global-icon { 
+  font-size: 28px; /* Size for the large server list icon (44x44px container) */
+  line-height: 1;
+  display: flex; 
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.server-initials-placeholder { 
+  font-weight: bold;
+  font-size: 10px; 
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
 }
 
 .add-rating-button {
@@ -542,12 +600,68 @@
   background-color: #3aa070; /* Darker green */
 }
 
+.remove-last-rating-button {
+  padding: 5px 10px;
+  background-color: #f04747; /* Discord Red - indicates a potentially destructive action */
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background-color 0.2s ease-in-out;
+  margin-left: 5px; /* Add some space from the Rate button */
+}
+
+.remove-last-rating-button:hover {
+  background-color: #c83f3f; /* Darker red */
+}
+
+.remove-last-rating-button:disabled,
+.add-rating-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.tracked-user-actions {
+  margin-left: auto; /* Pushes buttons to the right */
+  display: flex;
+  align-items: center;
+}
+
+.untrack-user-button {
+  /* Inherits from .icon-button */
+  background-color: #f04747; /* Discord Red - for default state */
+  margin-left: 5px;
+  padding: 6px 8px;
+}
+
+.untrack-user-button svg {
+  fill: #fff; /* White icon for contrast on red */
+}
+
+.untrack-user-button:hover {
+  background-color: #c83f3f; /* Darker Red on hover */
+}
+
+.untrack-user-button:hover svg {
+  /* fill: #fff; // Already white, no change needed for icon color on hover unless desired */
+}
+
+.untrack-user-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* --- Graph Display Area --- */
 .graph-display-area {
   margin-bottom: 20px;
   padding: 15px;
   background-color: #2f3136; /* Consistent with other containers */
   border-radius: 8px;
+  min-height: 550px; /* Ensure it doesn't collapse when loading/empty */
+  display: flex; /* To help center content like loading/error messages */
+  flex-direction: column;
+  /* justify-content: center; */ /* Remove or use align-items if ScoreGraph is not full height */
 }
 
 /* --- Graph Specific Loading/Error Styles --- */
@@ -720,8 +834,7 @@
   margin-top: 25px;
 }
 
-.modal-actions .button-primary,
-.modal-actions .button-secondary {
+.modal-actions button { /* Base style for ALL buttons inside .modal-actions */
   padding: 10px 18px;
   border: none;
   border-radius: 4px;
@@ -729,6 +842,9 @@
   cursor: pointer;
   transition: background-color 0.2s ease-out, opacity 0.2s ease-out;
   font-size: 0.95em;
+  appearance: none; /* Reset browser default appearance */
+  -webkit-appearance: none;
+  -moz-appearance: none;
 }
 
 .modal-actions .button-primary {
@@ -749,6 +865,15 @@
   background-color: #5a6069;
 }
 
+.modal-actions .button-danger {
+  background-color: #f04747; /* Discord Red */
+  color: white;
+}
+
+.modal-actions .button-danger:hover {
+  background-color: #c83f3f; /* Darker Red */
+}
+
 .modal-error {
   color: #f04747; /* Discord Red */
   background-color: rgba(240, 71, 71, 0.1);
@@ -759,7 +884,76 @@
   font-size: 0.9em;
 }
 
-.global-icon-placeholder {
-  font-size: 28px; /* Adjust size as needed */
-  line-height: 1; /* Ensure it centers well */
+/* Confirmation Modal Specifics */
+.confirmation-modal-content .confirmation-message {
+  padding: 10px 0;
+  font-size: 1.1em;
+  line-height: 1.5;
+  color: #dcddde; /* Ensure good contrast */
+}
+
+/* General Icon Button Style */
+.icon-button {
+  background-color: transparent; /* Or specific color */
+  border: none;
+  padding: 5px; /* Adjust for icon size */
+  cursor: pointer;
+  display: inline-flex; /* Helps align icon */
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px; /* Optional: for consistency */
+  transition: background-color 0.2s ease-in-out, opacity 0.2s ease-in-out;
+  vertical-align: middle; /* Align with text/other buttons if any */
+}
+
+.icon-button svg {
+  display: block; /* Remove extra space below SVG */
+}
+
+.undo-last-rating-button {
+  /* specific to this button if needed, inherits from .icon-button */
+  background-color: #faa61a; /* Discord yellow/gold-ish */
+  margin-left: 5px;
+  padding: 6px 8px; /* Slightly adjust padding for a single icon */
+}
+
+.undo-last-rating-button svg {
+  fill: #fff; /* White icon for contrast on yellow */
+}
+
+.undo-last-rating-button:hover {
+  background-color: #e0910a; /* Darker yellow */
+}
+
+.undo-last-rating-button:disabled,
+.add-rating-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.untrack-user-button.icon-button {
+  /* Explicitly target when both classes are present if needed, or just .untrack-user-button */
+  background-color: #f04747 !important; /* Discord Red - for default state, added !important for specificity */
+  margin-left: 5px;
+  padding: 6px 8px; /* Keep this padding if it works for the icon size */
+}
+
+.untrack-user-button.icon-button svg {
+  fill: #fff !important; /* White icon for contrast on red, added !important */
+}
+
+.untrack-user-button.icon-button:hover {
+  background-color: #c83f3f !important; /* Darker Red on hover */
+}
+
+.untrack-user-button.icon-button:hover svg {
+  /* fill: #fff; // Already white */
+}
+
+.untrack-user-button:disabled, /* This can target .untrack-user-button directly now */
+.icon-button:disabled { /* Keep general disabled style for icon buttons if any */
+  opacity: 0.6;
+  cursor: not-allowed;
+  /* If it needs a specific disabled background for red button: */
+  /* background-color: #7a2323 !important; */ 
 }

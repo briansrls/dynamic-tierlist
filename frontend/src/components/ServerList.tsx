@@ -95,7 +95,7 @@ const ServerList: React.FC<ServerListProps> = ({ servers, isLoading, error, sele
         >
           <div className="server-icon-image-wrapper">
             {server.icon === "global_icon_placeholder" ? (
-              <span className="global-icon-placeholder" role="img" aria-label="Global View">🌍</span>
+              <span className="server-list-global-icon" role="img" aria-label="Global View">🌍</span>
             ) : getDiscordIconUrl(server.id, server.icon) ? (
               <img src={getDiscordIconUrl(server.id, server.icon)} alt={server.name} />
             ) : (
