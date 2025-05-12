@@ -2,7 +2,7 @@
  * @name SocialCreditPlugin
  * @author YourName
  * @authorId YourDiscordId
- * @version 1.3.2
+ * @version 1.3.3
  * @description Allows assigning social credit scores via message context menu. Uses BDFDB Library.
  * @source https://github.com/yourusername/SocialCreditPlugin
  * @updateUrl https://raw.githubusercontent.com/yourusername/SocialCreditPlugin/main/SocialCreditPlugin.plugin.js
@@ -10,6 +10,7 @@
 
 module.exports = (_ => {
   const changeLog = {
+      "1.3.3": "Switched to BdApi.Net.fetch for network requests to diagnose 'undefined' response issue.",
       "1.3.2": "Improved handling of fetch response in submitCreditScore to prevent 'reading ok of undefined' error.",
       "1.3.1": "Corrected UserStore access path from BDFDB.LibraryModules to BDFDB.LibraryStores. Added null check for UserStore.",
       "1.3.0": "Refactored to use BDFDB library for improved stability and compatibility. Changed modal to BDFDB.ModalUtils.",
@@ -132,11 +133,16 @@ module.exports = (_ => {
                       apiKey: ""
                   }
               };
-              this.API_ENDPOINT = "http://localhost:8000/plugin/ratings"; // Ensure this is defined
+              this.API_ENDPOINT = "http://localhost:8000/plugin/ratings";
           }
 
           onStart() {
               console.log(`[${this.getName()}] Started successfully with BDFDB Library.`);
+               // Ensure BdApi.Net.fetch is available
+              if (!BdApi.Net || typeof BdApi.Net.fetch !== 'function') {
+                  console.error(`[${this.getName()}] CRITICAL: BdApi.Net.fetch is not available! Plugin may not make network requests.`);
+                  BDFDB.NotificationUtils.toast("Network request function (BdApi.Net.fetch) is missing. Plugin cannot contact server.", { type: "error" });
+              }
           }
 
           onStop() {
@@ -270,46 +276,55 @@ module.exports = (_ => {
                   return;
               }
 
-              try {
-                  const response = await BDFDB.LibraryRequires.fetch(this.API_ENDPOINT, {
-                      method: "POST",
-                      headers: {
-                          "Content-Type": "application/json",
-                          "X-Plugin-API-Key": settings.apiKey
-                      },
-                      body: JSON.stringify(payload)
-                  });
+              // Ensure BdApi.Net.fetch is available
+              if (!BdApi.Net || typeof BdApi.Net.fetch !== 'function') {
+                  console.error(`[${this.getName()}] BdApi.Net.fetch is not available! Cannot make network request.`);
+                  BDFDB.NotificationUtils.toast("Network request function is missing. Plugin cannot contact server.", { type: "error" });
+                  return;
+              }
 
-                  if (!response) { // Check if response is undefined/null
-                      BDFDB.NotificationUtils.toast("Submission failed: No response from server.", { type: "error" });
-                      console.error(`[${this.getName()}] Fetch returned undefined. Payload:`, payload);
+              const requestOptions = {
+                  method: "POST",
+                  headers: {
+                      "Content-Type": "application/json",
+                      "X-Plugin-API-Key": settings.apiKey
+                  },
+                  body: JSON.stringify(payload)
+              };
+
+              console.log(`[${this.getName()}] Attempting to submit score with BdApi.Net.fetch. Endpoint: ${this.API_ENDPOINT}, Options:`, requestOptions);
+
+              try {
+                  const response = await BdApi.Net.fetch(this.API_ENDPOINT, requestOptions);
+
+                  if (!response) {
+                      BDFDB.NotificationUtils.toast("Submission failed: No response from server (BdApi.Net.fetch returned undefined/null).", { type: "error" });
+                      console.error(`[${this.getName()}] BdApi.Net.fetch returned undefined/null. Payload:`, payload);
                       return;
                   }
                   
-                  // Assuming 'response' is a Fetch API-like Response object if it's not undefined.
-                  // It should have a 'status' property and a 'text()' method.
-                  // The 'ok' property is true if status is 200-299.
+                  // BdApi.Net.fetch's response object is similar to the standard Fetch API Response
+                  // It should have .ok, .status, and .text()/.json() methods.
+                  
+                  const responseBodyText = await response.text(); // Get response body as text for logging
 
-                  if (response.status === 201) { // Specifically check for 201 Created
+                  if (response.status === 201) {
                       BDFDB.NotificationUtils.toast("Social credit score submitted successfully!", { type: "success" });
-                      console.log(`[${this.getName()}] Social credit score submitted successfully:`, payload);
-                  } else if (response.ok) { // Handle other 2xx success statuses (ok is true for 200-299)
+                      console.log(`[${this.getName()}] Social credit score submitted successfully (Status 201). Payload:`, payload, "Response Body:", responseBodyText);
+                  } else if (response.ok) { // For other 2xx statuses
                       BDFDB.NotificationUtils.toast(`Score submission acknowledged (Status: ${response.status})!`, { type: "info" });
-                      console.log(`[${this.getName()}] Score submission acknowledged with status ${response.status}:`, payload);
-                  } else { // Handle non-ok responses (4xx, 5xx)
-                      let errorText = "Could not retrieve error details from server.";
-                      try {
-                          // Ensure response.text() is awaited if it's a promise
-                          errorText = await response.text(); 
-                      } catch (textError) {
-                          console.error(`[${this.getName()}] Failed to get error text from response:`, textError);
-                      }
-                      BDFDB.NotificationUtils.toast(`API Error: ${response.status} - ${errorText || response.statusText || "Unknown server error"}`, { type: "error", timeout: 7000 });
-                      console.error(`[${this.getName()}] API Error: Status: ${response.status}, StatusText: ${response.statusText}, Body: ${errorText}, Payload:`, payload);
+                      console.log(`[${this.getName()}] Score submission acknowledged with status ${response.status}. Payload:`, payload, "Response Body:", responseBodyText);
+                  } else { // For 4xx, 5xx errors
+                      BDFDB.NotificationUtils.toast(`API Error: ${response.status} - ${responseBodyText || response.statusText || "Unknown server error"}`, { type: "error", timeout: 7000 });
+                      console.error(`[${this.getName()}] API Error: Status: ${response.status}, StatusText: ${response.statusText}, Body: ${responseBodyText}, Payload:`, payload);
                   }
-              } catch (error) { // This catches actual promise rejections (network down, DNS issues etc.)
-                  BDFDB.NotificationUtils.toast("Failed to send score. Network error or server down. Check console.", { type: "error", timeout: 7000 });
-                  console.error(`[${this.getName()}] Network or other error submitting score:`, error, "Payload:", payload);
+              } catch (error) { // This catches network errors (server down, DNS, CORS if any, etc.)
+                  BDFDB.NotificationUtils.toast("Failed to send score. Network error or server issue. Check console.", { type: "error", timeout: 7000 });
+                  console.error(`[${this.getName()}] Network or other error submitting score with BdApi.Net.fetch:`, error, "Payload:", payload);
+                  // Log additional error properties if available
+                  if (error && error.message) console.error(`[${this.getName()}] Error message: ${error.message}`);
+                  if (error && error.response) console.error(`[${this.getName()}] Error response object:`, error.response);
+
               }
           }
       };
