@@ -2,14 +2,15 @@
  * @name SocialCreditPlugin
  * @author YourName
  * @authorId YourDiscordId
- * @version 1.3.3
- * @description Allows assigning social credit scores via message context menu. Uses BDFDB Library.
+ * @version 1.3.4
+ * @description Allows assigning social credit scores via message context menu. Uses BDFDB Library. Includes X-Acting-User-ID header.
  * @source https://github.com/yourusername/SocialCreditPlugin
  * @updateUrl https://raw.githubusercontent.com/yourusername/SocialCreditPlugin/main/SocialCreditPlugin.plugin.js
  */
 
 module.exports = (_ => {
   const changeLog = {
+      "1.3.4": "Added X-Acting-User-ID header to API requests using the acting_user_id from the payload.",
       "1.3.3": "Switched to BdApi.Net.fetch for network requests to diagnose 'undefined' response issue.",
       "1.3.2": "Improved handling of fetch response in submitCreditScore to prevent 'reading ok of undefined' error.",
       "1.3.1": "Corrected UserStore access path from BDFDB.LibraryModules to BDFDB.LibraryStores. Added null check for UserStore.",
@@ -130,19 +131,22 @@ module.exports = (_ => {
               _this = this;
               this.defaults = {
                   settings: {
-                      apiKey: ""
+                      apiKey: "" // Default API key is an empty string
                   }
               };
               this.API_ENDPOINT = "http://localhost:8000/plugin/ratings";
+              let loadedSettings = BDFDB.DataUtils.load(this, "settings");
+              console.log(`[${this.getName()}] Initial settings loaded in onLoad:`, loadedSettings);
           }
 
           onStart() {
               console.log(`[${this.getName()}] Started successfully with BDFDB Library.`);
-               // Ensure BdApi.Net.fetch is available
               if (!BdApi.Net || typeof BdApi.Net.fetch !== 'function') {
                   console.error(`[${this.getName()}] CRITICAL: BdApi.Net.fetch is not available! Plugin may not make network requests.`);
                   BDFDB.NotificationUtils.toast("Network request function (BdApi.Net.fetch) is missing. Plugin cannot contact server.", { type: "error" });
               }
+              let currentSettings = BDFDB.DataUtils.get(this, "settings");
+              console.log(`[${this.getName()}] Settings onStart:`, currentSettings);
           }
 
           onStop() {
@@ -151,6 +155,7 @@ module.exports = (_ => {
 
           getSettingsPanel(collapseStates = {}) {
               let settings = BDFDB.DataUtils.get(this, "settings");
+              console.log(`[${this.getName()}] Opening settings panel. Current API key: ${settings.apiKey ? settings.apiKey.substring(0,5) + '...' : 'EMPTY'}`);
 
               return BDFDB.PluginUtils.createSettingsPanel(this, {
                   collapseStates: collapseStates,
@@ -166,6 +171,7 @@ module.exports = (_ => {
                               type: "password"
                           },
                           onChange: (value) => {
+                              console.log(`[${this.getName()}] API Key changed in settings panel to: ${value ? value.substring(0,5) + '...' : 'EMPTY'}`);
                               BDFDB.DataUtils.set(this, "settings", "apiKey", value);
                           }
                       })
@@ -179,10 +185,10 @@ module.exports = (_ => {
                   const channel = e.instance.props.channel;
 
                   let [children, index] = BDFDB.ContextMenuUtils.findItem(e.returnvalue, { id: ["pin", "unpin", "reply"]});
-                  if (index === -1) {
+                  if (index === -1) { // Fallback if common items not found
                       index = (e.returnvalue.props.children[0] && e.returnvalue.props.children[0].props && e.returnvalue.props.children[0].props.children) ? e.returnvalue.props.children[0].props.children.length : 0;
                       if (!e.returnvalue.props.children[0] || !e.returnvalue.props.children[0].props || !e.returnvalue.props.children[0].props.children) {
-                           e.returnvalue.props.children.unshift(BDFDB.ContextMenuUtils.createItemGroup());
+                           e.returnvalue.props.children.unshift(BDFDB.ContextMenuUtils.createItemGroup()); // Create a group if none exist
                            children = e.returnvalue.props.children[0].props.children;
                            index = 0;
                       } else {
@@ -201,6 +207,7 @@ module.exports = (_ => {
                   if (children && Array.isArray(children)) {
                        children.splice(index + 1, 0, menuItem);
                   } else if (e.returnvalue && e.returnvalue.props && Array.isArray(e.returnvalue.props.children)) {
+                      // If the top level is an array of items/groups, add our item in a new group
                       e.returnvalue.props.children.push(BDFDB.ContextMenuUtils.createItemGroup({children: [menuItem]}));
                   } else {
                       console.warn(`[${this.getName()}] Could not reliably find place to insert context menu item.`);
@@ -210,11 +217,14 @@ module.exports = (_ => {
 
           handleCreditAdjustAction(message, channel) {
               let settings = BDFDB.DataUtils.get(this, "settings");
-              if (!settings.apiKey) {
+              console.log(`[${this.getName()}] handleCreditAdjustAction: Retrieved settings:`, settings);
+
+              if (!settings || !settings.apiKey) {
                   BDFDB.NotificationUtils.toast("API Key not set. Please configure it in the plugin settings.", { type: "error" });
-                  console.error(`[${this.getName()}] API Key is not set.`);
+                  console.error(`[${this.getName()}] API Key is not set or settings object is missing. API Key: '${settings ? settings.apiKey : "settings undefined"}'`);
                   return;
               }
+              console.log(`[${this.getName()}] API Key for request (from settings): ${settings.apiKey ? settings.apiKey.substring(0,5) + '...' : 'EMPTY'}`);
 
               const UserStore = BDFDB.LibraryStores.UserStore;
               if (!UserStore || typeof UserStore.getCurrentUser !== 'function') {
@@ -229,9 +239,11 @@ module.exports = (_ => {
                   console.error(`[${this.getName()}] Failed to get current user (currentUser is null).`);
                   return;
               }
+              console.log(`[${this.getName()}] Acting User ID: ${currentUser.id}`);
+
 
               const creditData = {
-                  acting_user_id: currentUser.id,
+                  acting_user_id: currentUser.id, // This will be used for the X-Acting-User-ID header
                   target_user_id: message.author.id,
                   server_id: channel.guild_id || "@me",
                   message_id: message.id
@@ -271,12 +283,20 @@ module.exports = (_ => {
 
           async submitCreditScore(payload) {
               let settings = BDFDB.DataUtils.get(this, "settings");
-              if (!settings.apiKey) {
+              // API Key check is also done in handleCreditAdjustAction, but good for safety here too.
+              if (!settings || !settings.apiKey) {
                   BDFDB.NotificationUtils.toast("API Key is missing. Aborting submission.", { type: "error" });
+                  console.error(`[${this.getName()}] API Key is missing in submitCreditScore. Settings:`, settings);
+                  return;
+              }
+              // acting_user_id should be part of the payload passed to this function
+              if (!payload.acting_user_id) {
+                   BDFDB.NotificationUtils.toast("Acting User ID is missing. Aborting submission.", { type: "error" });
+                  console.error(`[${this.getName()}] acting_user_id is missing in payload for submitCreditScore. Payload:`, payload);
                   return;
               }
 
-              // Ensure BdApi.Net.fetch is available
+
               if (!BdApi.Net || typeof BdApi.Net.fetch !== 'function') {
                   console.error(`[${this.getName()}] BdApi.Net.fetch is not available! Cannot make network request.`);
                   BDFDB.NotificationUtils.toast("Network request function is missing. Plugin cannot contact server.", { type: "error" });
@@ -287,9 +307,10 @@ module.exports = (_ => {
                   method: "POST",
                   headers: {
                       "Content-Type": "application/json",
-                      "X-Plugin-API-Key": settings.apiKey
+                      "X-Plugin-API-Key": settings.apiKey,
+                      "X-Acting-User-ID": payload.acting_user_id // Added the new header
                   },
-                  body: JSON.stringify(payload)
+                  body: JSON.stringify(payload) // The payload already contains acting_user_id, target_user_id etc.
               };
 
               console.log(`[${this.getName()}] Attempting to submit score with BdApi.Net.fetch. Endpoint: ${this.API_ENDPOINT}, Options:`, requestOptions);
@@ -303,28 +324,23 @@ module.exports = (_ => {
                       return;
                   }
                   
-                  // BdApi.Net.fetch's response object is similar to the standard Fetch API Response
-                  // It should have .ok, .status, and .text()/.json() methods.
-                  
-                  const responseBodyText = await response.text(); // Get response body as text for logging
+                  const responseBodyText = await response.text(); 
 
                   if (response.status === 201) {
                       BDFDB.NotificationUtils.toast("Social credit score submitted successfully!", { type: "success" });
                       console.log(`[${this.getName()}] Social credit score submitted successfully (Status 201). Payload:`, payload, "Response Body:", responseBodyText);
-                  } else if (response.ok) { // For other 2xx statuses
+                  } else if (response.ok) { 
                       BDFDB.NotificationUtils.toast(`Score submission acknowledged (Status: ${response.status})!`, { type: "info" });
                       console.log(`[${this.getName()}] Score submission acknowledged with status ${response.status}. Payload:`, payload, "Response Body:", responseBodyText);
-                  } else { // For 4xx, 5xx errors
+                  } else { 
                       BDFDB.NotificationUtils.toast(`API Error: ${response.status} - ${responseBodyText || response.statusText || "Unknown server error"}`, { type: "error", timeout: 7000 });
                       console.error(`[${this.getName()}] API Error: Status: ${response.status}, StatusText: ${response.statusText}, Body: ${responseBodyText}, Payload:`, payload);
                   }
-              } catch (error) { // This catches network errors (server down, DNS, CORS if any, etc.)
+              } catch (error) { 
                   BDFDB.NotificationUtils.toast("Failed to send score. Network error or server issue. Check console.", { type: "error", timeout: 7000 });
                   console.error(`[${this.getName()}] Network or other error submitting score with BdApi.Net.fetch:`, error, "Payload:", payload);
-                  // Log additional error properties if available
                   if (error && error.message) console.error(`[${this.getName()}] Error message: ${error.message}`);
                   if (error && error.response) console.error(`[${this.getName()}] Error response object:`, error.response);
-
               }
           }
       };

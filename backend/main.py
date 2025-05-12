@@ -161,7 +161,7 @@ def initialize_sample_data():
 initialize_sample_data() # Initialize with sample data when the app starts
 
 # --- API Key Authentication for Plugin (Modified for Per-User Keys) ---
-USER_PLUGIN_API_KEY_HEADER_NAME = "X-User-Plugin-API-Key"
+USER_PLUGIN_API_KEY_HEADER_NAME = "X-Plugin-API-Key"
 ACTING_USER_ID_HEADER_NAME = "X-Acting-User-ID"
 
 user_plugin_api_key_header = APIKeyHeader(name=USER_PLUGIN_API_KEY_HEADER_NAME, auto_error=False)
