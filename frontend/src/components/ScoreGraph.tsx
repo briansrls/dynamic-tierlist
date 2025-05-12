@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { Payload } from 'recharts/types/component/DefaultTooltipContent';
+import { MultiLineGraphDataPoint } from '../components/MainContent'; // Import from MainContent
 
 // Define ScoreEntry interface to match backend (ScoreEntry model in main.py)
 export interface ScoreEntry {
@@ -21,47 +22,225 @@ export interface ScoreEntry {
 
 // const currentUserDisplayName = "Stinky Cat9"; // No longer needed for mock specific lines
 
+// For multi-line graph (all tracked users)
+// MultiLineGraphDataPoint is imported, but also defined here for clarity if this component becomes standalone
+// export interface MultiLineGraphDataPoint {
+//   timestamp: number;
+//   [userSpecificDataKey: string]: number; 
+// }
+
+export interface LineConfig {
+  dataKey: string;  // e.g., "userID1_score" or "score_value" for single line
+  name: string;     // Legend name, e.g., "User1"
+  stroke: string;   // Color, e.g., "#8884d8"
+  avatarUrl: string | null; // Added avatarUrl
+}
+
+// Helper function to round to a "nice" number for graph axes
+const roundToNiceNumber = (value: number, roundUp: boolean): number => {
+  if (value === 0) return 0;
+  if (!isFinite(value)) return roundUp ? 100 : -10; // Default for non-finite inputs
+
+  const magnitude = Math.pow(10, Math.floor(Math.log10(Math.abs(value))));
+  let step = magnitude / 2; // e.g., for 1257, magnitude is 1000, step is 500
+
+  // Adjust step for smaller numbers to get nicer rounding (e.g. 10s, 50s, 100s)
+  if (magnitude >= 1000) step = magnitude / 4; // Round to 250s for thousands
+  else if (magnitude >= 100) step = magnitude / 2;  // Round to 50s for hundreds
+  else if (magnitude >= 10) step = magnitude / 2;   // Round to 5s for tens
+  else step = magnitude; // For numbers < 10, round to nearest 1, 0.1 etc.
+
+  // Ensure step is not zero for very small values approaching zero
+  if (step === 0) step = 0.1;
+  // A simpler step logic: round to a fraction of the magnitude
+  // step = magnitude / 10; //  e.g. for 1257, step is 100. For 57, step is 10.
+  // if (Math.abs(value) < 100 && Math.abs(value) >= 10) step = 5;
+  // else if (Math.abs(value) < 10) step = 1;
+
+  if (roundUp) {
+    return Math.ceil(value / step) * step;
+  }
+  return Math.floor(value / step) * step;
+};
+
+// Custom Dot component for the *active* (hovered) point
+const CustomActiveDot = (props: any) => {
+  const { cx, cy, stroke, avatarUrl, payload, dataKey } = props;
+
+  // If cx or cy is not a valid number, don't render the dot
+  if (typeof cx !== 'number' || typeof cy !== 'number' || isNaN(cx) || isNaN(cy)) {
+    // console.log(`CustomActiveDot: Skipping render due to invalid cx/cy for ${dataKey} at payload`, payload);
+    return null;
+  }
+
+  if (!avatarUrl) {
+    return <circle cx={cx} cy={cy} r={8} fill={stroke} stroke="#fff" strokeOpacity={0.8} strokeWidth={2} />;
+  }
+
+  const DOT_SIZE = 28;
+  const BORDER_WIDTH = 2;
+
+  return (
+    <g transform={`translate(${cx},${cy})`}>
+      {/* Solid background circle matching the line stroke to ensure occlusion */}
+      <circle cx={0} cy={0} r={DOT_SIZE / 2 + BORDER_WIDTH} fill={stroke} />
+      {/* Optional: A slightly larger, semi-transparent outer ring for a halo effect if desired later */}
+      {/* <circle cx={0} cy={0} r={DOT_SIZE / 2 + BORDER_WIDTH + 1} fill={stroke} opacity={0.2} /> */}
+      <defs>
+        <clipPath id={`clip-active-${cx}-${cy}-${stroke}`}> {/* More unique ID */}
+          <circle cx={0} cy={0} r={DOT_SIZE / 2} />
+        </clipPath>
+      </defs>
+      <image
+        x={-DOT_SIZE / 2}
+        y={-DOT_SIZE / 2}
+        width={DOT_SIZE}
+        height={DOT_SIZE}
+        href={avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png'}
+        clipPath={`url(#clip-active-${cx}-${cy}-${stroke})`}
+      />
+    </g>
+  );
+};
+
+// Custom Dot component for the last point of a line
+const CustomLastPointDot = (props: any) => {
+  const { cx, cy, stroke, payload, dataKey, avatarUrl, index, data } = props;
+
+  // If cx or cy is not a valid number, don't render the dot
+  if (typeof cx !== 'number' || typeof cy !== 'number' || isNaN(cx) || isNaN(cy)) {
+    // console.log(`CustomLastPointDot: Skipping render due to invalid cx/cy for ${dataKey}, index ${index}`);
+    return null;
+  }
+
+  let lastDataPointIndexForLine = -1;
+  if (data && data.length > 0) {
+    for (let i = data.length - 1; i >= 0; i--) {
+      if (data[i][dataKey] !== null && data[i][dataKey] !== undefined) {
+        lastDataPointIndexForLine = i;
+        break;
+      }
+    }
+  }
+
+  // Uncomment this block for detailed debugging
+  if (data && index >= Math.max(0, data.length - 2)) { // Log for last 2 points to reduce noise, ensure index is not negative
+    console.log(
+      `DotDebug (${dataKey}, dataIndex: ${index}): ` +
+      `avatarUrl: ${avatarUrl ? avatarUrl : 'NULL_OR_UNDEFINED'}, ` +
+      `lastDataIdxForLine: ${lastDataPointIndexForLine}, ` +
+      `isLastPointMatch: ${index === lastDataPointIndexForLine}, ` +
+      `cx: ${cx}, cy: ${cy}, ` +
+      `payloadValue: ${payload ? payload[dataKey] : 'N/A'}`
+    );
+  }
+
+  if (index === lastDataPointIndexForLine && avatarUrl) {
+    console.log(`CustomLastPointDot: Rendering for ${dataKey}, index ${index}, cx=${cx}, cy=${cy}, avatar=${avatarUrl}`);
+    const DOT_SIZE = 24;
+    const BORDER_WIDTH = 2;
+    return (
+      <g transform={`translate(${cx},${cy})`}> {/* Center group on the point */}
+        {/* Optional: Circle border */}
+        <circle cx={0} cy={0} r={DOT_SIZE / 2 + BORDER_WIDTH} fill={stroke} opacity={0.5} />
+        <circle cx={0} cy={0} r={DOT_SIZE / 2 + BORDER_WIDTH - 1} fill={props.stroke} />
+        <defs>
+          <clipPath id={`clip-${dataKey}-${index}`}>
+            <circle cx={0} cy={0} r={DOT_SIZE / 2} />
+          </clipPath>
+        </defs>
+        <image
+          x={-DOT_SIZE / 2}
+          y={-DOT_SIZE / 2}
+          width={DOT_SIZE}
+          height={DOT_SIZE}
+          href={avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png'}
+          clipPath={`url(#clip-${dataKey}-${index})`}
+        />
+      </g>
+    );
+  }
+
+  // Render a smaller, standard dot for other points if desired, or no dot if activeDot is used
+  // Recharts Line `dot` prop can be true (default dot), false (no dots), or a custom element/function.
+  // If we return null here, only activeDot will show. Let's render a small standard dot for non-last points.
+  // console.log(`Rendering fallback dot for ${dataKey} at index ${index}`); // DEBUG
+  return <circle cx={cx} cy={cy} r={3} stroke={stroke} fill="#fff" strokeWidth={1} />;
+};
+
 // Remove mockScoreData or keep it for fallback if data is empty, but ensure it matches new ScoreEntry
 const mockScoreFallbackData: ScoreEntry[] = [
   // Example: { timestamp: new Date().toISOString(), score_value: 0, reason: "Initial (Mock)" },
 ];
 
 interface ScoreGraphProps {
-  data: ScoreEntry[];
-  graphTitle?: string; // Optional title for the graph, e.g., "Scores for [User]"
+  data: ScoreEntry[] | MultiLineGraphDataPoint[]; // Can be single or multi-line data
+  graphTitle?: string;
+  lineConfigs?: LineConfig[]; // Optional for multi-line, if not provided, assumes single line
+  overallMinScore?: number; // Added for multi-line mode
+  overallMaxScore?: number; // Added for multi-line mode
 }
 
-const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle }) => {
-  const displayData = (!data || data.length === 0) ? mockScoreFallbackData : data;
-  const isMockData = (!data || data.length === 0) && mockScoreFallbackData.length > 0;
-  const effectiveTitle = graphTitle || "Social Credit Score Over Time";
+const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, overallMinScore, overallMaxScore }) => {
+  // Determine if data is for multi-line based on lineConfigs or data structure
+  const isMultiLine = lineConfigs && lineConfigs.length > 0;
 
-  if (displayData.length === 0 && !isMockData) {
+  // Use a type guard for safety, though structure of data also implies its type
+  const displayData = data as (ScoreEntry[] | MultiLineGraphDataPoint[]);
+  console.log("ScoreGraph displayData:", JSON.stringify(displayData)); // Log the data
+
+  const effectiveTitle = graphTitle || (isMultiLine ? "Tracked Users Overview" : "Score History");
+
+  if (!displayData || displayData.length === 0) {
     return (
-      <div className="score-graph-container" style={{ width: '100%', height: 300, textAlign: 'center', paddingTop: '20px' }}>
+      <div className="score-graph-container" style={{ width: '100%', height: 550, textAlign: 'center', paddingTop: '20px' }}>
         <h3>{effectiveTitle}</h3>
         <p>No score data available to display.</p>
       </div>
     );
   }
 
+  // Tooltip formatter needs to be aware of multi-line context
+  const tooltipFormatter = (value: number, name: string, item: Payload<number, string>) => {
+    // For multi-line, 'name' will be the dataKey like 'USERID_score'
+    // We need to find the corresponding legend name from lineConfigs
+    let displayName = name;
+    if (isMultiLine && lineConfigs) {
+      const config = lineConfigs.find(lc => lc.dataKey === name);
+      if (config) displayName = config.name;
+    } else if (name === 'score_value') {
+      displayName = "Score"; // Default for single line
+    }
+
+    const entryPayload = item.payload as ScoreEntry | MultiLineGraphDataPoint;
+    let reasonText = '';
+    // Reason is only available in ScoreEntry (single line view typically)
+    if (!isMultiLine && 'reason' in entryPayload && entryPayload.reason) {
+      reasonText = ` (Reason: ${entryPayload.reason})`;
+    }
+    return [`${displayName}: ${value}${reasonText}`, null];
+  };
+
   return (
-    <div className="score-graph-container" style={{ width: '100%', height: 300 }}>
+    <div className="score-graph-container" style={{ width: '100%', height: 550 }}>
       <h3>{effectiveTitle}</h3>
-      <ResponsiveContainer>
-        <LineChart data={displayData}>
+      <ResponsiveContainer width="100%" height={500} style={{ overflow: 'visible' }}>
+        <LineChart
+          data={displayData}
+          margin={{ top: 40, right: 40, left: 10, bottom: 40 }}
+        >
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis
             dataKey="timestamp"
-            tickFormatter={(numericalTimestamp) => { // Expects number
+            tickFormatter={(numericalTimestamp) => {
               if (typeof numericalTimestamp !== 'number') return '';
               try {
                 const date = new Date(numericalTimestamp);
-                // Show date and time if data spans less than ~3 days, otherwise just date
                 if (displayData.length > 1) {
-                  const firstDate = displayData[0].timestamp; // Already a number
-                  const lastDate = displayData[displayData.length - 1].timestamp; // Already a number
-                  if (Math.abs(lastDate - firstDate) < 3 * 24 * 60 * 60 * 1000) { // Less than 3 days
+                  // Assuming timestamp is number for both ScoreEntry and MultiLineGraphDataPoint
+                  const firstTs = (displayData[0] as any).timestamp;
+                  const lastTs = (displayData[displayData.length - 1] as any).timestamp;
+                  if (Math.abs(lastTs - firstTs) < 3 * 24 * 60 * 60 * 1000) {
                     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + date.toLocaleDateString([], { month: 'short', day: 'numeric' });
                   }
                 }
@@ -74,9 +253,46 @@ const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle }) => {
             type="number"
             scale="time"
           />
-          <YAxis dataKey="score_value" type="number" domain={['auto', 'auto']} allowDataOverflow />
+          {/* For multi-line, YAxis might need dynamic domain or multiple axes, for now, single YAxis for scores */}
+          <YAxis
+            type="number"
+            domain={[
+              (dataMinFromData: number, dataMaxFromData: number) => {
+                if (isMultiLine && typeof overallMinScore === 'number' && typeof overallMaxScore === 'number') {
+                  const range = Math.max(1, Math.abs(overallMaxScore - overallMinScore));
+                  const padding = Math.max(range * 0.15, 20);
+                  const paddedMin = Math.min(overallMinScore, 0) - padding;
+                  return roundToNiceNumber(paddedMin, false); // Round down
+                }
+                if (typeof dataMinFromData !== 'number' || typeof dataMaxFromData !== 'number' || isNaN(dataMinFromData) || isNaN(dataMaxFromData)) {
+                  return -10;
+                }
+                const range = Math.max(1, Math.abs(dataMaxFromData - dataMinFromData));
+                const padding = Math.max(range * 0.15, 20);
+                const paddedMin = Math.min(dataMinFromData, 0) - padding;
+                return roundToNiceNumber(paddedMin, false); // Round down
+              },
+              (dataMinFromData: number, dataMaxFromData: number) => {
+                if (isMultiLine && typeof overallMinScore === 'number' && typeof overallMaxScore === 'number') {
+                  const range = Math.max(1, Math.abs(overallMaxScore - overallMinScore));
+                  const padding = Math.max(range * 0.15, 20);
+                  const paddedMax = overallMaxScore + padding;
+                  return roundToNiceNumber(paddedMax, true); // Round up
+                }
+                if (typeof dataMinFromData !== 'number' || typeof dataMaxFromData !== 'number' || isNaN(dataMinFromData) || isNaN(dataMaxFromData)) {
+                  return 100;
+                }
+                const range = Math.max(1, Math.abs(dataMaxFromData - dataMinFromData));
+                const padding = Math.max(range * 0.15, 20);
+                const paddedMax = dataMaxFromData + padding;
+                return roundToNiceNumber(paddedMax, true); // Round up
+              }
+            ]}
+            allowDataOverflow
+            dataKey={!isMultiLine ? "score_value" : undefined}
+          />
           <Tooltip
-            labelFormatter={(numericalTimestamp: number) => { // Expects number
+            labelFormatter={(numericalTimestamp: number) => {
               if (typeof numericalTimestamp !== 'number') return '';
               try {
                 const date = new Date(numericalTimestamp);
@@ -85,21 +301,52 @@ const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle }) => {
                 return 'Invalid Date';
               }
             }}
-            formatter={(value: number, name: string, item: Payload<number, string>) => {
-              const entryPayload = item.payload as ScoreEntry;
-              const reasonText = entryPayload.reason ? ` (Reason: ${entryPayload.reason})` : '';
-              return [`Score: ${value}${reasonText}`, null]; // Name can be null if only one line
-            }}
+            formatter={tooltipFormatter}
           />
           <Legend />
-          <Line
-            type="monotone"
-            dataKey="score_value"
-            stroke="#8884d8"
-            activeDot={{ r: 6 }}
-            name="Score"
-            dot={{ r: 3 }}
-          />
+          {isMultiLine && lineConfigs ? (
+            lineConfigs.map(config => (
+              <Line
+                key={config.dataKey}
+                type="monotone"
+                dataKey={config.dataKey}
+                stroke={config.stroke}
+                name={config.name}
+                connectNulls={true}
+                activeDot={(activeDotProps: any) => (
+                  <CustomActiveDot {...activeDotProps} avatarUrl={config.avatarUrl} />
+                )}
+                dot={(lineProps: any) => {
+                  const { key, index, ...restOfDotProps } = lineProps;
+                  const uniqueKey = key || `custom-dot-${config.dataKey}-${index}`;
+                  console.log(`ScoreGraph: dot render func called for line ${config.dataKey}, point index ${index}, uniqueKey ${uniqueKey}`);
+                  return (
+                    <CustomLastPointDot
+                      key={uniqueKey}
+                      {...restOfDotProps}
+                      avatarUrl={config.avatarUrl}
+                      dataKey={config.dataKey}
+                      data={displayData}
+                      index={index}
+                    />
+                  );
+                }}
+                strokeWidth={2}
+              />
+            ))
+          ) : (
+            // Fallback to single line if no lineConfigs or not multi-line
+            <Line
+              type="monotone"
+              dataKey="score_value"
+              stroke="#8884d8"
+              connectNulls={true}
+              activeDot={{ r: 6 }}
+              name="Score"
+              dot={{ r: 3 }}
+              strokeWidth={2}
+            />
+          )}
         </LineChart>
       </ResponsiveContainer>
     </div>

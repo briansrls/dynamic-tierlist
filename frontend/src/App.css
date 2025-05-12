@@ -542,6 +542,14 @@
   background-color: #3aa070; /* Darker green */
 }
 
+/* --- Graph Display Area --- */
+.graph-display-area {
+  margin-bottom: 20px;
+  padding: 15px;
+  background-color: #2f3136; /* Consistent with other containers */
+  border-radius: 8px;
+}
+
 /* --- Graph Specific Loading/Error Styles --- */
 .graph-loading,
 .graph-error {
@@ -620,6 +628,11 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Force Recharts SVG surface to allow overflow for custom dots */
+.recharts-surface {
+  overflow: visible !important;
 }
 
 /* --- Modal Styles --- */
