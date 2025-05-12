@@ -542,6 +542,24 @@
   background-color: #3aa070; /* Darker green */
 }
 
+/* --- Graph Specific Loading/Error Styles --- */
+.graph-loading,
+.graph-error {
+  padding: 15px;
+  margin-top: 15px;
+  margin-bottom: 15px;
+  border-radius: 4px;
+  text-align: center;
+  color: #dcddde;
+  background-color: #2f3136; /* Consistent with other containers */
+}
+
+.graph-error {
+  background-color: rgba(240, 71, 71, 0.15); /* Softer error background */
+  color: #f04747; /* Discord Red */
+  border: 1px solid rgba(240, 71, 71, 0.3);
+}
+
 /* --- Login Screen Styles --- */
 .login-screen-container {
   display: flex;
@@ -602,4 +620,128 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+/* --- Modal Styles --- */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000; /* Ensure it's on top */
+  opacity: 0;
+  animation: fadeInModalOverlay 0.3s ease-out forwards;
+}
+
+@keyframes fadeInModalOverlay {
+  to { opacity: 1; }
+}
+
+.modal-content {
+  background-color: #2f3136; /* Discord mid-dark grey */
+  padding: 25px;
+  border-radius: 8px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+  width: 90%;
+  max-width: 450px;
+  color: #dcddde;
+  transform: scale(0.95);
+  opacity: 0;
+  animation: fadeInModalContent 0.3s 0.1s ease-out forwards;
+}
+
+@keyframes fadeInModalContent {
+  to { 
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.modal-content h2 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  color: #fff;
+  font-size: 1.8em;
+  border-bottom: 1px solid #4f545c;
+  padding-bottom: 10px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: #b9bbbe; /* Lighter grey for labels */
+}
+
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group textarea {
+  width: 100%;
+  padding: 10px;
+  background-color: #202225; /* Darker input background */
+  color: #dcddde;
+  border: 1px solid #18191c; /* Subtle border */
+  border-radius: 4px;
+  font-size: 1em;
+  box-sizing: border-box;
+}
+
+.form-group textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px; /* Space between buttons */
+  margin-top: 25px;
+}
+
+.modal-actions .button-primary,
+.modal-actions .button-secondary {
+  padding: 10px 18px;
+  border: none;
+  border-radius: 4px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s ease-out, opacity 0.2s ease-out;
+  font-size: 0.95em;
+}
+
+.modal-actions .button-primary {
+  background-color: #43b581; /* Discord Green */
+  color: white;
+}
+
+.modal-actions .button-primary:hover {
+  background-color: #3aa070;
+}
+
+.modal-actions .button-secondary {
+  background-color: #4f545c; /* Grey button */
+  color: #dcddde;
+}
+
+.modal-actions .button-secondary:hover {
+  background-color: #5a6069;
+}
+
+.modal-error {
+  color: #f04747; /* Discord Red */
+  background-color: rgba(240, 71, 71, 0.1);
+  border: 1px solid rgba(240, 71, 71, 0.3);
+  padding: 10px;
+  border-radius: 4px;
+  margin-top: 15px;
+  font-size: 0.9em;
 }

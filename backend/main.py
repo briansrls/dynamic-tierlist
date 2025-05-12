@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware # Import CORS middleware
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 from datetime import datetime, timezone
+from fastapi import Path
 
 from core.config import settings
 import httpx
@@ -243,16 +244,18 @@ async def auth_discord_callback(code: str, state: Optional[str] = None):
             if discord_id not in db_users:
                 app_user = User(
                     user_id=discord_id, 
-                    username=discord_username,
+                    username=discord_username, # Store base username
                     profile_picture_url=profile_pic_url,
                     social_credits_given=[],
-                    servers=user_servers_list # Store fetched servers
+                    servers=user_servers_list
                 )
                 db_users[discord_id] = app_user
+                print(f"Added new user {discord_username} (ID: {discord_id}) to db_users from OAuth callback.")
             else:
-                db_users[discord_id].username = discord_username
+                db_users[discord_id].username = discord_username # Update base username
                 db_users[discord_id].profile_picture_url = profile_pic_url
-                db_users[discord_id].servers = user_servers_list # Update servers
+                db_users[discord_id].servers = user_servers_list # Update servers list from OAuth
+                print(f"Updated user {discord_username} (ID: {discord_id}) in db_users from OAuth callback.")
             
             # Create JWT for our application session
             access_token_expires = timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -318,18 +321,27 @@ async def read_user_tracked_servers(current_user: User = Depends(get_current_use
 
 @app.post("/users/{acting_user_id}/credit/{target_user_id}", response_model=UserSocialCreditTarget)
 async def give_social_credit(
-    acting_user_id: str,
-    target_user_id: str,
-    update_request: SocialCreditUpdateRequest
+    acting_user_id: str,  # Path parameter, taken from URL
+    target_user_id: str,  # Path parameter, taken from URL
+    update_request: SocialCreditUpdateRequest, # Request body
+    current_user: User = Depends(get_current_user) # Authenticated user
 ):
-    if acting_user_id not in db_users:
-        raise HTTPException(status_code=404, detail=f"Acting user {acting_user_id} not found")
+    # Validate that the path acting_user_id matches the authenticated user
+    if acting_user_id != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Path acting_user_id does not match authenticated user."
+        )
+    
+    # Now, acting_user is the authenticated current_user object, already fetched from db_users
+    acting_user = current_user 
+    # No need to check if acting_user.user_id is in db_users, get_current_user already did that.
+    
     if target_user_id not in db_users:
         raise HTTPException(status_code=404, detail=f"Target user {target_user_id} not found")
-    if acting_user_id == target_user_id:
+    
+    if acting_user.user_id == target_user_id:
         raise HTTPException(status_code=400, detail="Users cannot give credit to themselves")
-
-    acting_user = db_users[acting_user_id]
 
     # Find if this acting_user already has a credit entry for target_user_id
     credit_target_entry = None
@@ -447,7 +459,8 @@ async def get_discord_user_profile(
     current_user: User = Depends(get_current_user) # To ensure the endpoint is used by authenticated app users
 ):
     """
-    Fetches a Discord user's public profile by their ID using the application's bot token.
+    Fetches a Discord user's public profile by their ID using the application's bot token,
+    and upserts them into the local db_users.
     """
     if not settings.DISCORD_BOT_TOKEN:
         raise HTTPException(
@@ -468,18 +481,37 @@ async def get_discord_user_profile(
             user_data = response.json()
             
             avatar_hash = user_data.get("avatar")
-            user_id = user_data.get("id")
+            user_id = user_data.get("id") # This is the ID of the user we looked up
+            username = user_data.get("username")
+            discriminator = user_data.get("discriminator") # Needed for constructing full username for display
+            
             avatar_full_url = None
             if avatar_hash and user_id:
-                # Construct avatar URL (e.g., https://cdn.discordapp.com/avatars/USER_ID/AVATAR_HASH.png)
-                # Check if animated (starts with a_) for .gif, otherwise .png
                 extension = "gif" if avatar_hash.startswith("a_") else "png"
                 avatar_full_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.{extension}?size=128"
+
+            # Upsert this fetched user into our db_users
+            if user_id and username: # Ensure we have the basic info
+                if user_id not in db_users:
+                    db_users[user_id] = User(
+                        user_id=user_id,
+                        username=username, # Store base username
+                        profile_picture_url=avatar_full_url,
+                        servers=[],
+                        social_credits_given=[]
+                    )
+                    print(f"Added new user {username}#{discriminator} (ID: {user_id}) to db_users from direct lookup.")
+                else:
+                    # User exists, only update profile details from this specific lookup
+                    db_users[user_id].username = username # Update base username
+                    db_users[user_id].profile_picture_url = avatar_full_url
+                    # DO NOT overwrite .servers or .social_credits_given here
+                    print(f"Updated profile for user {username}#{discriminator} (ID: {user_id}) in db_users from direct lookup.")
             
             return DiscordUserProfile(
-                id=user_data.get("id", "Unknown ID"),
-                username=user_data.get("username", "Unknown User"),
-                discriminator=user_data.get("discriminator", "0000"),
+                id=user_id if user_id else "Unknown ID",
+                username=username if username else "Unknown User",
+                discriminator=discriminator if discriminator else "0000",
                 avatar=avatar_hash,
                 avatar_url=avatar_full_url,
                 banner=user_data.get("banner"),

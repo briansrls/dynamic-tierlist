@@ -8,140 +8,98 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
-  // ReferenceDot, // Unused
 } from 'recharts';
-import { Payload } from 'recharts/types/component/DefaultTooltipContent'; // Import Payload type
+import { Payload } from 'recharts/types/component/DefaultTooltipContent';
 
-// Define ScoreEntry interface
-interface ScoreEntry {
-  time: string | number; // Using 'time' as per mockScoreData and existing graph structure
+// Define ScoreEntry interface to match backend (ScoreEntry model in main.py)
+export interface ScoreEntry {
+  timestamp: number; // Changed to number (epoch milliseconds)
   score_value: number;
-  reason?: string;
-  sc9_vs_theebis?: number; // Keep if used by mock data lines
-  sc9_vs_vough?: number;   // Keep if used by mock data lines
-  user?: string;
+  reason?: string | null;
+  // Remove mock data specific fields like sc9_vs_theebis, sc9_vs_vough, user, time
 }
 
-// Logged-in user (for mock data perspective) - This seems to be for mock data, consider removing if real data is used
-// const currentUserId = "stinky_cat9";
-const currentUserDisplayName = "Stinky Cat9";
+// const currentUserDisplayName = "Stinky Cat9"; // No longer needed for mock specific lines
 
-const mockScoreData: ScoreEntry[] = [
-  { time: 'Jan', sc9_vs_theebis: 5, sc9_vs_vough: 10, score_value: 0 },
-  { time: 'Feb', sc9_vs_theebis: 0, sc9_vs_vough: 50, score_value: 0 },
-  { time: 'Mar', sc9_vs_theebis: -50, sc9_vs_vough: 200, score_value: 0 },
-  { time: 'Apr', sc9_vs_theebis: -200, sc9_vs_vough: 500, score_value: 0 },
-  { time: 'May', sc9_vs_theebis: -1000, sc9_vs_vough: 1000, score_value: 0 },
+// Remove mockScoreData or keep it for fallback if data is empty, but ensure it matches new ScoreEntry
+const mockScoreFallbackData: ScoreEntry[] = [
+  // Example: { timestamp: new Date().toISOString(), score_value: 0, reason: "Initial (Mock)" },
 ];
-
-// const mockUserPoints = [ // Unused
-//   { time: 'Mar', value: -50, user: 'Theebis (from SC9)', pic: 'https://via.placeholder.com/30/00BCD4/FFFFFF?Text=T' },
-//   { time: 'Apr', value: 500, user: 'Vough (from SC9)', pic: 'https://via.placeholder.com/30/FFC107/FFFFFF?Text=V' },
-// ];
-
-// const CustomDot = (props: any) => { // Unused
-//   console.log("CustomDot props:", props);
-//   const { cx, cy, payload, userPic, pointTime, pointUserLabel } = props;
-// 
-//   if (!payload || typeof payload.time === 'undefined') {
-//     return (
-//       <g>
-//         <title>Error: Recharts internal data missing for this reference point.</title>
-//         <circle cx={cx} cy={cy} r={8} fill="#ff0000" stroke="#fff" strokeWidth={2} />
-//       </g>
-//     );
-//   }
-// 
-//   if (!userPic) {
-//     return <circle cx={cx} cy={cy} r={5} fill="#8884d8" stroke="#fff" strokeWidth={1} />;
-//   }
-// 
-//   const clipId = `clip-${pointTime}-${pointUserLabel?.replace(/[\s()]/g, '-')}`; // Corrected regex
-// 
-//   return (
-//     <svg x={cx - 15} y={cy - 15} width={30} height={30} viewBox="0 0 100 100">
-//       <defs>
-//         <clipPath id={clipId}>
-//           <circle cx="50" cy="50" r="50" />
-//         </clipPath>
-//       </defs>
-//       <image
-//         href={userPic}
-//         width="100"
-//         height="100"
-//         clipPath={`url(#${clipId})`}
-//       />
-//     </svg>
-//   );
-// };
 
 interface ScoreGraphProps {
   data: ScoreEntry[];
-  // currentUserId?: string; // Unused, commented out
+  graphTitle?: string; // Optional title for the graph, e.g., "Scores for [User]"
 }
 
-const ScoreGraph: React.FC<ScoreGraphProps> = ({ data }) => {
-  const displayData = (!data || data.length === 0) ? mockScoreData : data;
-  const isMockData = (!data || data.length === 0);
+const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle }) => {
+  const displayData = (!data || data.length === 0) ? mockScoreFallbackData : data;
+  const isMockData = (!data || data.length === 0) && mockScoreFallbackData.length > 0;
+  const effectiveTitle = graphTitle || "Social Credit Score Over Time";
+
+  if (displayData.length === 0 && !isMockData) {
+    return (
+      <div className="score-graph-container" style={{ width: '100%', height: 300, textAlign: 'center', paddingTop: '20px' }}>
+        <h3>{effectiveTitle}</h3>
+        <p>No score data available to display.</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="score-graph-container" style={{ width: '100%', height: 500 }}>
-      <h2>Discord Social Credit {isMockData ? "(Mock Data)" : ""}</h2>
+    <div className="score-graph-container" style={{ width: '100%', height: 300 }}>
+      <h3>{effectiveTitle}</h3>
       <ResponsiveContainer>
         <LineChart data={displayData}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis
-            dataKey="time" // Use 'time' as per ScoreEntry and mockScoreData
-            tickFormatter={(label) => {
-              // Format if it looks like a date/timestamp, otherwise return as is (e.g., 'Jan')
-              if (typeof label === 'number' || (typeof label === 'string' && !isNaN(Date.parse(label)))) {
-                const date = new Date(label);
-                const formattedTime = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const formattedDate = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-                return `${formattedDate} (${formattedTime})`;
+            dataKey="timestamp"
+            tickFormatter={(numericalTimestamp) => { // Expects number
+              if (typeof numericalTimestamp !== 'number') return '';
+              try {
+                const date = new Date(numericalTimestamp);
+                // Show date and time if data spans less than ~3 days, otherwise just date
+                if (displayData.length > 1) {
+                  const firstDate = displayData[0].timestamp; // Already a number
+                  const lastDate = displayData[displayData.length - 1].timestamp; // Already a number
+                  if (Math.abs(lastDate - firstDate) < 3 * 24 * 60 * 60 * 1000) { // Less than 3 days
+                    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                  }
+                }
+                return date.toLocaleDateString([], { year: '2-digit', month: 'short', day: 'numeric' });
+              } catch (e) {
+                return 'Invalid Date';
               }
-              return label;
             }}
+            domain={['dataMin', 'dataMax']}
+            type="number"
+            scale="time"
           />
-          <YAxis dataKey="score_value" type="number" domain={['auto', 'auto']} allowDataOverflow={!isMockData} />
+          <YAxis dataKey="score_value" type="number" domain={['auto', 'auto']} allowDataOverflow />
           <Tooltip
-            labelFormatter={(label: string | number) => {
-              if (typeof label === 'number' || (typeof label === 'string' && !isNaN(Date.parse(label)))) {
-                const date = new Date(label);
-                const formattedTime = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const formattedDate = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-                return `${formattedDate} (${formattedTime})`;
+            labelFormatter={(numericalTimestamp: number) => { // Expects number
+              if (typeof numericalTimestamp !== 'number') return '';
+              try {
+                const date = new Date(numericalTimestamp);
+                return date.toLocaleString([], { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+              } catch (e) {
+                return 'Invalid Date';
               }
-              return label;
             }}
             formatter={(value: number, name: string, item: Payload<number, string>) => {
-              const entryPayload = item.payload as ScoreEntry; // Cast to ScoreEntry
-              const reasonText = entryPayload.reason ? ` (${entryPayload.reason})` : '';
-              const userText = entryPayload.user ? `${entryPayload.user}: ` : '';
-
-              // For mock data, the 'name' refers to dataKeys like 'sc9_vs_theebis'
-              // For real data, 'name' would likely be 'score_value' or similar.
-              if (isMockData) {
-                // 'name' here is one of the series keys like 'sc9_vs_theebis'
-                // 'value' is the score for that series at this point.
-                let seriesName = name;
-                if (name === 'sc9_vs_theebis') seriesName = `${currentUserDisplayName} -> Theebis`;
-                if (name === 'sc9_vs_vough') seriesName = `${currentUserDisplayName} -> Vough`;
-                return [`${seriesName}: ${value}`, null]; // Second element can be null or a specific label
-              }
-              // For actual data, we expect a single line usually.
-              return [`${userText}Score: ${value}${reasonText}`, null];
+              const entryPayload = item.payload as ScoreEntry;
+              const reasonText = entryPayload.reason ? ` (Reason: ${entryPayload.reason})` : '';
+              return [`Score: ${value}${reasonText}`, null]; // Name can be null if only one line
             }}
           />
           <Legend />
-          {isMockData ? (
-            <>
-              <Line type="monotone" dataKey="sc9_vs_theebis" stroke="#8884d8" activeDot={{ r: 8 }} name={`${currentUserDisplayName} -> Theebis`} />
-              <Line type="monotone" dataKey="sc9_vs_vough" stroke="#82ca9d" activeDot={{ r: 8 }} name={`${currentUserDisplayName} -> Vough`} />
-            </>
-          ) : (
-            <Line type="monotone" dataKey="score_value" stroke="#8884d8" activeDot={{ r: 8 }} name="Score Over Time" />
-          )}
+          <Line
+            type="monotone"
+            dataKey="score_value"
+            stroke="#8884d8"
+            activeDot={{ r: 6 }}
+            name="Score"
+            dot={{ r: 3 }}
+          />
         </LineChart>
       </ResponsiveContainer>
     </div>
