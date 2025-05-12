@@ -957,3 +957,149 @@
   /* If it needs a specific disabled background for red button: */
   /* background-color: #7a2323 !important; */ 
 }
+
+/* --- Plugin API Settings Styles --- */
+.plugin-api-settings-container {
+  margin-top: 30px;
+  padding: 20px;
+  background-color: #2f3136; /* Consistent dark container */
+  border-radius: 8px;
+  border: 1px solid #202225; /* Subtle border */
+}
+
+.plugin-api-settings-container h4 {
+  margin-top: 0;
+  color: #fff;
+  border-bottom: 1px solid #4f545c;
+  padding-bottom: 10px;
+  margin-bottom: 15px;
+  font-size: 1.3em;
+}
+
+.api-key-status p {
+  margin: 5px 0 10px;
+  color: #dcddde;
+}
+
+.api-key-status code {
+  background-color: #202225;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.api-key-status button {
+  margin-right: 10px; /* Spacing for multiple buttons if on same line */
+}
+
+.new-api-key-display {
+  margin-top: 15px;
+  padding: 10px;
+  background-color: #202225;
+  border: 1px solid #18191c;
+  border-radius: 4px;
+}
+
+.new-api-key-display p {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.new-api-key-display code {
+  display: block; /* Make code block take full width */
+  background-color: #151618;
+  padding: 8px;
+  border-radius: 3px;
+  font-family: monospace;
+  word-break: break-all; /* Prevent long keys from breaking layout */
+  margin-bottom: 10px;
+  color: #b9bbbe;
+}
+
+.new-api-key-display button {
+  /* Uses default button styles or can be specific if needed */
+}
+
+.plugin-instructions p {
+  font-style: italic;
+}
+
+.plugin-instructions code {
+  cursor: pointer; /* Hint that user ID is clickable/copyable */
+  /* Styles for copyable code can be added later */
+}
+
+.error-message {
+  color: #f04747; /* Discord Red */
+  background-color: rgba(240, 71, 71, 0.1);
+  border: 1px solid rgba(240, 71, 71, 0.2);
+  padding: 8px;
+  border-radius: 4px;
+  margin: 10px 0;
+}
+
+.success-message {
+  color: #43b581; /* Discord Green */
+  background-color: rgba(67, 181, 129, 0.1);
+  border: 1px solid rgba(67, 181, 129, 0.3);
+  padding: 8px;
+  border-radius: 4px;
+  margin: 10px 0;
+}
+
+.settings-cog-area {
+  display: flex;
+  justify-content: center; /* Center the cog button if sidebar-bottom is full width */
+  margin-bottom: 8px; /* Space between cog and user profile */
+}
+
+.settings-cog-button {
+  /* Inherits from .icon-button */
+  padding: 6px; /* Adjust padding for desired size */
+}
+
+.settings-cog-button svg {
+  fill: #b9bbbe; /* Discord medium-grey icon color */
+  width: 22px; /* Adjust icon size */
+  height: 22px;
+}
+
+.settings-cog-button:hover svg {
+  fill: #fff; /* White on hover */
+}
+
+/* Modal Header (reusable for modals with a title and close button) */
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #202225; /* Darker separator */
+  padding-bottom: 15px;
+  margin-bottom: 20px;
+}
+
+.modal-header h2 {
+  margin: 0; /* Remove default h2 margin */
+  font-size: 1.6em; /* Slightly smaller than main modal title if needed */
+  color: #fff;
+}
+
+.close-modal-button {
+  /* Inherits from .icon-button */
+  /* background-color: transparent; */ /* Already set by .icon-button */
+}
+
+.close-modal-button svg {
+  fill: #72767d; /* Discord dark-grey icon color */
+  width: 18px;
+  height: 18px;
+}
+
+.close-modal-button:hover svg {
+  fill: #dcddde; /* Lighter grey on hover */
+}
+
+/* Optional: Specific styling for settings modal content if it needs to be wider/taller */
+.settings-modal-content {
+  /* max-width: 600px; */ /* Example: make it wider than default modal */
+}

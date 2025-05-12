@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   LineChart,
   Line,
@@ -65,12 +65,17 @@ const roundToNiceNumber = (value: number, roundUp: boolean): number => {
 
 // Custom Dot component for the *active* (hovered) point
 const CustomActiveDot = (props: any) => {
-  const { cx, cy, stroke, avatarUrl, payload, dataKey } = props;
+  const { cx, cy, stroke, avatarUrl, payload, dataKey, mouseYInChart } = props;
 
-  // If cx or cy is not a valid number, don't render the dot
   if (typeof cx !== 'number' || typeof cy !== 'number' || isNaN(cx) || isNaN(cy)) {
-    // console.log(`CustomActiveDot: Skipping render due to invalid cx/cy for ${dataKey} at payload`, payload);
     return null;
+  }
+
+  // If mouseYInChart is available, check proximity
+  const Y_THRESHOLD = 20; // Only show avatar if mouse Y is within 20px of dot's cy
+  if (mouseYInChart !== null && Math.abs(cy - mouseYInChart) > Y_THRESHOLD) {
+    // If mouse is too far vertically, render a standard smaller active dot or nothing
+    return <circle cx={cx} cy={cy} r={6} fill={stroke} stroke="#fff" strokeOpacity={0.7} strokeWidth={1} />;
   }
 
   if (!avatarUrl) {
@@ -82,12 +87,9 @@ const CustomActiveDot = (props: any) => {
 
   return (
     <g transform={`translate(${cx},${cy})`}>
-      {/* Solid background circle matching the line stroke to ensure occlusion */}
       <circle cx={0} cy={0} r={DOT_SIZE / 2 + BORDER_WIDTH} fill={stroke} />
-      {/* Optional: A slightly larger, semi-transparent outer ring for a halo effect if desired later */}
-      {/* <circle cx={0} cy={0} r={DOT_SIZE / 2 + BORDER_WIDTH + 1} fill={stroke} opacity={0.2} /> */}
       <defs>
-        <clipPath id={`clip-active-${cx}-${cy}-${stroke}`}> {/* More unique ID */}
+        <clipPath id={`clip-active-${cx}-${cy}-${stroke}`}>
           <circle cx={0} cy={0} r={DOT_SIZE / 2} />
         </clipPath>
       </defs>
@@ -184,6 +186,8 @@ interface ScoreGraphProps {
 }
 
 const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, overallMinScore, overallMaxScore, isLoading, error }) => {
+  const [mouseYInChart, setMouseYInChart] = useState<number | null>(null);
+
   const isMultiLine = lineConfigs && lineConfigs.length > 0;
   const displayData = data as (ScoreEntry[] | MultiLineGraphDataPoint[]);
   const effectiveTitle = graphTitle || (isMultiLine ? "Tracked Users Overview" : "Score History");
@@ -213,6 +217,25 @@ const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, 
   }
 
   const noDataAvailable = !displayData || displayData.length === 0;
+
+  const handleChartMouseMove = (event: any) => {
+    if (event && event.activeCoordinate && typeof event.activeCoordinate.y === 'number') {
+      setMouseYInChart(event.activeCoordinate.y);
+    } else if (event && typeof event.chartY === 'number') {
+      // Fallback if activeCoordinate isn't directly available with y for plot area
+      // but chartY (relative to SVG) and top margin are.
+      // This requires knowing the top margin of the LineChart component.
+      const chartTopMargin = 40; // As defined in LineChart margin prop
+      setMouseYInChart(event.chartY - chartTopMargin);
+    }
+    // else {
+    //  setMouseYInChart(null); // Or keep last known if preferred while mouse is still over plot
+    // }
+  };
+
+  const handleChartMouseLeave = () => {
+    setMouseYInChart(null);
+  };
 
   // Tooltip formatter needs to be aware of multi-line context
   const tooltipFormatter = (value: number, name: string, item: Payload<number, string>) => {
@@ -247,23 +270,18 @@ const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, 
           <LineChart
             data={displayData}
             margin={{ top: 40, right: 40, left: 10, bottom: 40 }}
+            onMouseMove={handleChartMouseMove}
+            onMouseLeave={handleChartMouseLeave}
           >
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis
               dataKey="timestamp"
               tickFormatter={(numericalTimestamp) => {
-                if (typeof numericalTimestamp !== 'number') return '';
+                if (typeof numericalTimestamp !== 'number' || isNaN(numericalTimestamp)) return '';
                 try {
                   const date = new Date(numericalTimestamp);
-                  if (displayData.length > 1) {
-                    // Assuming timestamp is number for both ScoreEntry and MultiLineGraphDataPoint
-                    const firstTs = (displayData[0] as any).timestamp;
-                    const lastTs = (displayData[displayData.length - 1] as any).timestamp;
-                    if (Math.abs(lastTs - firstTs) < 3 * 24 * 60 * 60 * 1000) {
-                      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-                    }
-                  }
-                  return date.toLocaleDateString([], { year: '2-digit', month: 'short', day: 'numeric' });
+                  // Always format as "Month Day", e.g., "Jan 15"
+                  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
                 } catch (e) {
                   return 'Invalid Date';
                 }
@@ -271,6 +289,8 @@ const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, 
               domain={['dataMin', 'dataMax']}
               type="number"
               scale="time"
+              tickMargin={10}
+            // interval="preserveStartEnd" // Consider uncommenting if dates are still too dense
             />
             {/* For multi-line, YAxis might need dynamic domain or multiple axes, for now, single YAxis for scores */}
             <YAxis
@@ -332,8 +352,9 @@ const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, 
                   stroke={config.stroke}
                   name={config.name}
                   connectNulls={true}
+                  isAnimationActive={false}
                   activeDot={(activeDotProps: any) => (
-                    <CustomActiveDot {...activeDotProps} avatarUrl={config.avatarUrl} />
+                    <CustomActiveDot {...activeDotProps} avatarUrl={config.avatarUrl} mouseYInChart={mouseYInChart} />
                   )}
                   dot={(lineProps: any) => {
                     const { key, index, ...restOfDotProps } = lineProps;
@@ -359,7 +380,8 @@ const ScoreGraph: React.FC<ScoreGraphProps> = ({ data, graphTitle, lineConfigs, 
                 dataKey="score_value"
                 stroke="#8884d8"
                 connectNulls={true}
-                activeDot={{ r: 6 }}
+                isAnimationActive={false}
+                activeDot={{ r: 8 }}
                 name="Score"
                 dot={{ r: 3 }}
                 strokeWidth={2}

@@ -1,11 +1,13 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, Security, Header
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware # Import CORS middleware
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 from datetime import datetime, timezone
 from fastapi import Path
+import secrets # For generating secure tokens
 
 from core.config import settings
 import httpx
@@ -36,6 +38,8 @@ class ScoreEntry(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     score_value: float  # Absolute score at this timestamp
     reason: Optional[str] = None
+    server_id: Optional[str] = None   # NEW for plugin context
+    message_id: Optional[str] = None  # NEW for plugin context
 
 class UserSocialCreditTarget(BaseModel):
     target_user_id: str
@@ -54,7 +58,9 @@ class User(BaseModel):
     username: str
     profile_picture_url: Optional[str] = None
     social_credits_given: List[UserSocialCreditTarget] = []
-    servers: List[UserServerInfo] = [] # Add a list to store user's servers
+    servers: List[UserServerInfo] = []
+    plugin_api_key: Optional[str] = None # New field for user-specific plugin API key
+    plugin_api_key_generated_at: Optional[datetime] = None # New field for generation time
 
 class Server(BaseModel):
     server_id: str
@@ -88,6 +94,14 @@ class GuildMemberStatus(BaseModel):
     is_member: bool
     username_in_server: Optional[str] = None # Could be nickname or global name
     # We could also include the full member object if needed later
+
+class PluginRatingCreate(BaseModel):
+    acting_user_id: str # Discord ID of user using the plugin
+    target_user_id: str # Discord ID of user whose message was rated
+    server_id: str
+    message_id: str
+    score_delta: float
+    # No reason field as per request
 
 # --- In-Memory Database ---
 # For now, we'll use dictionaries to simulate MongoDB collections.
@@ -145,6 +159,76 @@ def initialize_sample_data():
     user2.social_credits_given.append(bob_gives_alice_credit)
 
 initialize_sample_data() # Initialize with sample data when the app starts
+
+# --- API Key Authentication for Plugin (Modified for Per-User Keys) ---
+USER_PLUGIN_API_KEY_HEADER_NAME = "X-User-Plugin-API-Key"
+ACTING_USER_ID_HEADER_NAME = "X-Acting-User-ID"
+
+user_plugin_api_key_header = APIKeyHeader(name=USER_PLUGIN_API_KEY_HEADER_NAME, auto_error=False)
+acting_user_id_header = APIKeyHeader(name=ACTING_USER_ID_HEADER_NAME, auto_error=False) # Not a security scheme, just a header
+
+async def get_authenticated_plugin_user(
+    user_provided_key: Optional[str] = Security(user_plugin_api_key_header),
+    acting_user_id: Optional[str] = Header(None, alias=ACTING_USER_ID_HEADER_NAME) # Get acting_user_id from header
+) -> User:
+    if not user_provided_key:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User Plugin API Key is missing")
+    if not acting_user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{ACTING_USER_ID_HEADER_NAME} header is missing")
+
+    user = db_users.get(acting_user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Acting user ID {acting_user_id} not found.")
+    
+    if not user.plugin_api_key:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User has not generated a Plugin API Key.")
+
+    # For direct comparison (not hashing for this mock DB example)
+    if user.plugin_api_key == user_provided_key:
+        return user # Return the authenticated user object
+    else:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid User Plugin API Key.")
+
+# Helper function to ensure user exists in db_users, fetching from Discord if not
+async def ensure_user_in_db(user_id_to_check: str, client: httpx.AsyncClient):
+    if user_id_to_check not in db_users:
+        if not settings.DISCORD_BOT_TOKEN:
+            print(f"WARNING: Cannot fetch profile for new user {user_id_to_check} - Bot token not configured.")
+            # Add a minimal user entry if bot token is missing
+            db_users[user_id_to_check] = User(user_id=user_id_to_check, username=f"User_{user_id_to_check[:6]}", servers=[], social_credits_given=[])
+            print(f"Added minimal entry for user {user_id_to_check} due to missing bot token.")
+            return
+
+        discord_api_url = f"https://discord.com/api/v10/users/{user_id_to_check}"
+        headers = {"Authorization": f"Bot {settings.DISCORD_BOT_TOKEN}"}
+        try:
+            response = await client.get(discord_api_url, headers=headers)
+            if response.status_code == 200:
+                user_data = response.json()
+                username = user_data.get("username", f"User_{user_id_to_check[:6]}")
+                discriminator = user_data.get("discriminator", "0000")
+                avatar_hash = user_data.get("avatar")
+                avatar_full_url = None
+                if avatar_hash:
+                    extension = "gif" if avatar_hash.startswith("a_") else "png"
+                    avatar_full_url = f"https://cdn.discordapp.com/avatars/{user_id_to_check}/{avatar_hash}.{extension}?size=128"
+                
+                db_users[user_id_to_check] = User(
+                    user_id=user_id_to_check,
+                    username=username,
+                    profile_picture_url=avatar_full_url,
+                    servers=[], social_credits_given=[]
+                )
+                print(f"Fetched and added new user {username}#{discriminator} (ID: {user_id_to_check}) to db_users.")
+            else:
+                print(f"Failed to fetch profile for new user {user_id_to_check} from Discord (Status: {response.status_code}). Adding minimal entry.")
+                db_users[user_id_to_check] = User(user_id=user_id_to_check, username=f"User_{user_id_to_check[:6]}", servers=[], social_credits_given=[])
+        except Exception as e:
+            print(f"Error fetching profile for new user {user_id_to_check}: {e}. Adding minimal entry.")
+            db_users[user_id_to_check] = User(user_id=user_id_to_check, username=f"User_{user_id_to_check[:6]}", servers=[], social_credits_given=[])
+    # If user already exists, their .servers and .social_credits_given are preserved.
+    # We might want to update their username/avatar here too, similar to get_discord_user_profile if this is a primary source.
+    # For now, ensure_user_in_db just focuses on existence.
 
 # --- API Endpoints ---
 
@@ -709,6 +793,90 @@ async def check_guild_membership(
         except Exception as e:
             print(f"BACKEND: Generic error checking membership for user {user_id_to_check} in server {server_id}: {str(e)}. Returning is_member=False.") # LOG 7
             return GuildMemberStatus(server_id=server_id, user_id=user_id_to_check, is_member=False, username_in_server="Generic Error")
+
+@app.get("/users/me/plugin-api-key-status", response_model_exclude_none=True)
+async def get_user_plugin_api_key_status(current_user: User = Depends(get_current_user)):
+    if current_user.plugin_api_key and current_user.plugin_api_key_generated_at:
+        return {
+            "has_key": True,
+            "generated_at": current_user.plugin_api_key_generated_at,
+            "key_preview": f"{current_user.plugin_api_key[:4]}...{current_user.plugin_api_key[-4:]}" # Show only a preview
+        }
+    return {"has_key": False}
+
+@app.post("/users/me/plugin-api-key", response_model_exclude_none=True)
+async def generate_user_plugin_api_key(current_user: User = Depends(get_current_user)):
+    new_key = secrets.token_urlsafe(32)
+    current_user.plugin_api_key = new_key
+    current_user.plugin_api_key_generated_at = datetime.now(timezone.utc)
+    # In a real DB, you'd save current_user here.
+    # For mock db_users, the object in the dict is updated by reference.
+    print(f"Generated new plugin API key for user {current_user.user_id}")
+    return {
+        "message": "New Plugin API Key generated. Please copy it now, it will not be shown again.",
+        "plugin_api_key": new_key,
+        "generated_at": current_user.plugin_api_key_generated_at
+    }
+
+@app.delete("/users/me/plugin-api-key", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_user_plugin_api_key(current_user: User = Depends(get_current_user)):
+    if current_user.plugin_api_key:
+        print(f"Revoking plugin API key for user {current_user.user_id}")
+        current_user.plugin_api_key = None
+        current_user.plugin_api_key_generated_at = None
+    else:
+        print(f"No plugin API key to revoke for user {current_user.user_id}")
+    return # 204 No Content
+
+@app.post("/plugin/ratings", response_model=UserSocialCreditTarget, status_code=status.HTTP_201_CREATED)
+async def create_rating_from_plugin(
+    rating_data: PluginRatingCreate,
+    # The dependency now returns the authenticated User object based on plugin key + acting_user_id from header
+    authenticated_acting_user: User = Depends(get_authenticated_plugin_user) 
+):
+    # acting_user_id from body should match the one authenticated by the key and header
+    if rating_data.acting_user_id != authenticated_acting_user.user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="acting_user_id in body does not match ID authenticated by plugin key/header.")
+    
+    acting_user = authenticated_acting_user # Already fetched and validated
+    target_user_id = rating_data.target_user_id
+
+    async with httpx.AsyncClient() as client:
+        # ensure_user_in_db might need to be called for target_user_id only now
+        # acting_user is already confirmed by get_authenticated_plugin_user
+        await ensure_user_in_db(target_user_id, client)
+    
+    if target_user_id not in db_users: # Should be handled by ensure_user_in_db, but defensive check
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Target user could not be ensured in database.")
+
+    # ... (rest of the score update logic from previous version of this endpoint, using acting_user) ...
+    if acting_user.user_id == target_user_id:
+        raise HTTPException(status_code=400, detail="Users cannot give credit to themselves.")
+
+    credit_target_entry = None
+    for entry in acting_user.social_credits_given:
+        if entry.target_user_id == target_user_id:
+            credit_target_entry = entry
+            break
+    
+    if not credit_target_entry:
+        credit_target_entry = UserSocialCreditTarget(target_user_id=target_user_id, scores_history=[])
+        acting_user.social_credits_given.append(credit_target_entry)
+
+    current_score = 0.0
+    if credit_target_entry.scores_history:
+        current_score = credit_target_entry.scores_history[-1].score_value
+    
+    new_score = current_score + rating_data.score_delta
+
+    new_score_entry = ScoreEntry(
+        score_value=new_score,
+        server_id=rating_data.server_id,
+        message_id=rating_data.message_id 
+    )
+    credit_target_entry.scores_history.append(new_score_entry)
+    print(f"Plugin rating: User {acting_user.user_id} gave {rating_data.score_delta} to {target_user_id} (msg: {rating_data.message_id} on srv: {rating_data.server_id})")
+    return credit_target_entry
 
 # MONGO_URI = "mongodb://localhost:27017/"
 # client = MongoClient(MONGO_URI)

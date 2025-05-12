@@ -4,6 +4,7 @@ import UserSearch, { UserProfile } from './UserSearch';
 import { AppUser, ServerData, GLOBAL_VIEW_SERVER_ID } from '../App';
 import AddRatingModal from './AddRatingModal';
 import ConfirmationModal from './ConfirmationModal';
+import PluginApiSettings from './PluginApiSettings';
 
 // Interface for the "wide" data format for the multi-line graph
 export interface MultiLineGraphDataPoint {
@@ -617,6 +618,10 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
           message={<>Are you sure you want to stop tracking <strong>{userToUntrack.username}#{userToUntrack.discriminator}</strong>? Their score history (from your perspective) will be cleared from this view.</>}
           confirmButtonText="Untrack"
         />
+      )}
+
+      {currentUser && (
+        <PluginApiSettings currentUser={currentUser} />
       )}
     </div>
   );
