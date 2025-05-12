@@ -619,10 +619,6 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
           confirmButtonText="Untrack"
         />
       )}
-
-      {currentUser && (
-        <PluginApiSettings currentUser={currentUser} />
-      )}
     </div>
   );
 };
