@@ -27,6 +27,12 @@ interface MainContentProps {
   globalViewServerId: string;
 }
 
+// Helper to generate distinct colors for graph lines (defined at module scope or outside component)
+const generateColor = (index: number): string => {
+  const colors = ["#8884d8", "#82ca9d", "#ffc658", "#ff7300", "#387908", "#00C49F", "#FFBB28", "#FF8042"];
+  return colors[index % colors.length];
+};
+
 const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser, userServers, globalViewServerId }) => {
   const [trackedUsers, setTrackedUsers] = useState<UserProfile[]>([]);
   const [isRatingModalOpen, setIsRatingModalOpen] = useState(false);
@@ -49,76 +55,55 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
 
   const [isInitialTrackedUsersLoaded, setIsInitialTrackedUsersLoaded] = useState(false); // New state
 
-  const processAndSetMultiLineGraphData = useCallback((users: UserProfile[], allScores: Map<string, ScoreEntry[]>) => {
-    if (users.length === 0) {
+  const processAndSetMultiLineGraphData = useCallback((usersForGraph: UserProfile[], allScores: Map<string, ScoreEntry[]>) => {
+    if (usersForGraph.length === 0) {
       setMultiLineGraphData([]);
       setLineConfigs([]);
-      setOverallMinScore(0); // Reset
-      setOverallMaxScore(100); // Reset
+      setOverallMinScore(0);
+      setOverallMaxScore(100);
       return;
     }
 
-    const newConfigs = users.map((user, index) => ({
+    const newConfigs = usersForGraph.map((user, index) => ({
       dataKey: `${user.id}_score`,
       name: user.username,
-      stroke: generateColor(index),
+      stroke: generateColor(index), // Uses the generateColor from above
       avatarUrl: user.avatar_url,
     }));
     setLineConfigs(newConfigs);
 
-    // Aggregate all timestamps and sort them
     let allTimestamps = new Set<number>();
     allScores.forEach(userScoreHistory => {
       userScoreHistory.forEach(score => allTimestamps.add(score.timestamp));
     });
     const sortedUniqueTimestamps = Array.from(allTimestamps).sort((a, b) => a - b);
 
-    if (sortedUniqueTimestamps.length === 0) {
+    if (sortedUniqueTimestamps.length === 0 && usersForGraph.length > 0) {
+      // Provide a single point at current time with 0 score for each user if no scores exist at all
+      // This helps in initializing the graph lines and axes, connectNulls will handle if it's the only point.
+      const now = Date.now();
+      setMultiLineGraphData(usersForGraph.map(u => ({ timestamp: now, [`${u.id}_score`]: 0 })));
+      // Also set overall scores for this empty-but-defined state
+      setOverallMinScore(0);
+      setOverallMaxScore(100); // Or a smaller default like 10 if 0 is the only value
+    } else if (sortedUniqueTimestamps.length === 0) {
       setMultiLineGraphData([]);
-      return;
-    }
-
-    // Create the "wide" data format with step-before logic
-    const lastScores: { [userId: string]: number } = {};
-    users.forEach(user => {
-      const userHistory = allScores.get(user.id) || [];
-      if (userHistory.length > 0) {
-        // Initialize with the score at or before the very first global timestamp
-        let initialScore = 0; // Default if no score found before/at first timestamp
-        const firstRelevantEntry = userHistory.filter(s => s.timestamp <= sortedUniqueTimestamps[0]).pop();
-        if (firstRelevantEntry) {
-          initialScore = firstRelevantEntry.score_value;
-        }
-        lastScores[user.id] = initialScore;
-      } else {
-        lastScores[user.id] = 0; // Or some other default like null/undefined if preferred by graph
-      }
-    });
-
-    const wideData: MultiLineGraphDataPoint[] = sortedUniqueTimestamps.map(ts => {
-      const dataPoint: MultiLineGraphDataPoint = { timestamp: ts };
-      users.forEach(user => {
-        const userHistory = allScores.get(user.id) || [];
-        const scoreAtTs = userHistory.find(s => s.timestamp === ts);
-        if (scoreAtTs) {
-          // lastScores[user.id] = scoreAtTs.score_value; // Keep track of last actual score for potential future use by tooltips
-          dataPoint[`${user.id}_score`] = scoreAtTs.score_value;
-        } else {
-          // For connectNulls to work, we explicitly set null if no score at this exact timestamp
-          dataPoint[`${user.id}_score`] = null as any; // Cast to any to satisfy MultiLineGraphDataPoint if needed, or adjust interface
-        }
+      setOverallMinScore(0);
+      setOverallMaxScore(100);
+    } else {
+      const wideData: MultiLineGraphDataPoint[] = sortedUniqueTimestamps.map(ts => {
+        const dataPoint: MultiLineGraphDataPoint = { timestamp: ts };
+        usersForGraph.forEach(user => {
+          const userHistory = allScores.get(user.id) || [];
+          const scoreAtTs = userHistory.find(s => s.timestamp === ts);
+          dataPoint[`${user.id}_score`] = scoreAtTs ? scoreAtTs.score_value : null;
+        });
+        return dataPoint;
       });
-      return dataPoint;
-    });
+      setMultiLineGraphData(wideData);
 
-    setMultiLineGraphData(wideData);
-    // The lastScores logic for step-before might still be useful for tooltips if default behavior isn't right.
-    // For now, focusing on connectNulls visual.
-
-    // Calculate overall min/max from the wideData for Y-axis domain setting
-    let minScore = Infinity;
-    let maxScore = -Infinity;
-    if (wideData.length > 0) {
+      let minScore = Infinity;
+      let maxScore = -Infinity;
       wideData.forEach(dataPoint => {
         newConfigs.forEach(config => {
           const score = dataPoint[config.dataKey];
@@ -128,18 +113,13 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
           }
         });
       });
-    } else {
-      minScore = 0;
-      maxScore = 100; // Default if no data points
+      setOverallMinScore(isFinite(minScore) ? minScore : 0);
+      setOverallMaxScore(isFinite(maxScore) ? maxScore : 100);
     }
-    // If all scores were Infinity/-Infinity (e.g. no actual scores), reset to default
-    setOverallMinScore(isFinite(minScore) ? minScore : 0);
-    setOverallMaxScore(isFinite(maxScore) ? maxScore : 100);
-  }, []);
+  }, []); // Empty dependency array as generateColor is stable (defined outside)
 
-
-  const fetchAllTrackedUserScores = useCallback(async (currentTrackedUsers: UserProfile[]) => {
-    if (!currentUser || currentTrackedUsers.length === 0) {
+  const fetchAllTrackedUserScores = useCallback(async (usersToFetchScoresFor: UserProfile[]) => {
+    if (!currentUser || usersToFetchScoresFor.length === 0) {
       setMultiLineGraphData([]);
       setLineConfigs([]);
       setIsLoadingMultiLineGraph(false); // Ensure loading is false if returning early
@@ -159,7 +139,7 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
     const allScoresMap = new Map<string, ScoreEntry[]>();
     let fetchErrorOccurred = false;
 
-    for (const targetUser of currentTrackedUsers) {
+    for (const targetUser of usersToFetchScoresFor) {
       try {
         const response = await fetch(`http://localhost:8000/users/${actingUserId}/credit/given/${targetUser.id}`, {
           headers: { 'Authorization': `Bearer ${token}` },
@@ -193,7 +173,7 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
     if (fetchErrorOccurred) {
       setMultiLineGraphError("Some user scores could not be fully loaded. Graph may be incomplete or show no data for some users.");
     }
-    processAndSetMultiLineGraphData(currentTrackedUsers, allScoresMap);
+    processAndSetMultiLineGraphData(usersToFetchScoresFor, allScoresMap);
     setIsLoadingMultiLineGraph(false);
   }, [currentUser, processAndSetMultiLineGraphData]);
 
@@ -259,24 +239,23 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
     }
   }, [currentUser]);
 
-  // Main data fetching and processing logic
+  // Main data fetching and processing logic - this drives what users are processed by fetchAllTrackedUserScores
   useEffect(() => {
     console.log("MAINCONTENT: Main data fetch effect. currentUser:", !!currentUser, "isInitialTrackedUsersLoaded:", isInitialTrackedUsersLoaded, "trackedUsers length:", trackedUsers.length, "selectedServerId:", selectedServerId);
 
     if (currentUser && isInitialTrackedUsersLoaded) {
-      if (selectedServerId === globalViewServerId) {
-        if (trackedUsers.length > 0) {
-          console.log("MAINCONTENT: Main data fetch - Global View - Processing tracked users:", trackedUsers.map(u => u.username));
-          fetchAllTrackedUserScores(trackedUsers);
-        } else {
-          console.log("MAINCONTENT: Main data fetch - Global View - No users tracked, clearing graph.");
-          setMultiLineGraphData([]);
-          setLineConfigs([]);
-          setMultiLineGraphError(null);
-          setIsLoadingMultiLineGraph(false);
-        }
+      let usersToProcessForGraph = trackedUsers;
+      if (selectedServerId && selectedServerId !== globalViewServerId) {
+        console.log(`MAINCONTENT: Main data fetch - Server View for ${selectedServerId}. Filtering tracked users for graph display.`);
+        usersToProcessForGraph = trackedUsers.filter(user => user.associatedServerIds?.includes(selectedServerId));
+        console.log("Filtered users for graph:", usersToProcessForGraph.map(u => u.username));
+      }
+
+      if (usersToProcessForGraph.length > 0) {
+        console.log("MAINCONTENT: Main data fetch - Calling fetchAllTrackedUserScores for:", usersToProcessForGraph.map(u => u.username));
+        fetchAllTrackedUserScores(usersToProcessForGraph);
       } else {
-        console.log(`MAINCONTENT: Main data fetch - Server View for ${selectedServerId} - Showing empty (awaiting plugin).`);
+        console.log("MAINCONTENT: Main data fetch - No users to display on graph (either no tracked users or filter resulted in empty). Clearing graph.");
         setMultiLineGraphData([]);
         setLineConfigs([]);
         setMultiLineGraphError(null);
@@ -428,12 +407,6 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
     }
   };
 
-  // Helper to generate distinct colors for graph lines
-  const generateColor = (index: number): string => {
-    const colors = ["#8884d8", "#82ca9d", "#ffc658", "#ff7300", "#387908", "#00C49F", "#FFBB28", "#FF8042"];
-    return colors[index % colors.length];
-  };
-
   const handleOpenUntrackConfirmModal = (targetUser: UserProfile) => {
     setUserToUntrack(targetUser);
     setIsUntrackConfirmModalOpen(true);
@@ -515,7 +488,7 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
           graphTitle={
             selectedServerId === globalViewServerId
               ? "All Tracked Users - Score Overview"
-              : `Scores (Perspective: ${userServers.find(s => s && s.id === selectedServerId)?.name || "Selected Server"})`
+              : `Scores (Perspective: ${userServers.find(s => s && s.id === selectedServerId)?.name || "Selected Server"}`
           }
           lineConfigs={lineConfigs}
           overallMinScore={overallMinScore}

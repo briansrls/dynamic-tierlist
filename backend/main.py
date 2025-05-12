@@ -169,16 +169,22 @@ acting_user_id_header = APIKeyHeader(name=ACTING_USER_ID_HEADER_NAME, auto_error
 
 async def get_authenticated_plugin_user(
     user_provided_key: Optional[str] = Security(user_plugin_api_key_header),
-    acting_user_id: Optional[str] = Header(None, alias=ACTING_USER_ID_HEADER_NAME) # Get acting_user_id from header
+    acting_user_id: Optional[str] = Header(None, alias=ACTING_USER_ID_HEADER_NAME)
 ) -> User:
     if not user_provided_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User Plugin API Key is missing")
     if not acting_user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{ACTING_USER_ID_HEADER_NAME} header is missing")
 
+    # Try to ensure the acting_user_id from the header exists in db_users
+    # This is important if the backend restarted and lost the in-memory user from OAuth login
+    async with httpx.AsyncClient() as client:
+        await ensure_user_in_db(acting_user_id, client) # Call helper here
+
     user = db_users.get(acting_user_id)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Acting user ID {acting_user_id} not found.")
+    if not user: # Should ideally be populated by ensure_user_in_db if was missing
+        # This might indicate ensure_user_in_db failed to add them (e.g., Discord API down and bot token missing)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Acting user ID {acting_user_id} could not be established in the system.")
     
     if not user.plugin_api_key:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User has not generated a Plugin API Key.")
@@ -192,6 +198,7 @@ async def get_authenticated_plugin_user(
 # Helper function to ensure user exists in db_users, fetching from Discord if not
 async def ensure_user_in_db(user_id_to_check: str, client: httpx.AsyncClient):
     if user_id_to_check not in db_users:
+        print(f"User {user_id_to_check} not in db_users. Attempting to fetch/create.") # Added log
         if not settings.DISCORD_BOT_TOKEN:
             print(f"WARNING: Cannot fetch profile for new user {user_id_to_check} - Bot token not configured.")
             # Add a minimal user entry if bot token is missing
@@ -831,51 +838,71 @@ async def revoke_user_plugin_api_key(current_user: User = Depends(get_current_us
 @app.post("/plugin/ratings", response_model=UserSocialCreditTarget, status_code=status.HTTP_201_CREATED)
 async def create_rating_from_plugin(
     rating_data: PluginRatingCreate,
-    # The dependency now returns the authenticated User object based on plugin key + acting_user_id from header
     authenticated_acting_user: User = Depends(get_authenticated_plugin_user) 
 ):
-    # acting_user_id from body should match the one authenticated by the key and header
+    print(f"PLUGIN_RATINGS: Start. Acting User from Dep: {authenticated_acting_user.user_id}, Target User from Body: {rating_data.target_user_id}") # LOG A
+
     if rating_data.acting_user_id != authenticated_acting_user.user_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="acting_user_id in body does not match ID authenticated by plugin key/header.")
     
-    acting_user = authenticated_acting_user # Already fetched and validated
+    acting_user = authenticated_acting_user 
     target_user_id = rating_data.target_user_id
 
-    async with httpx.AsyncClient() as client:
-        # ensure_user_in_db might need to be called for target_user_id only now
-        # acting_user is already confirmed by get_authenticated_plugin_user
+    print(f"PLUGIN_RATINGS: Ensuring target user {target_user_id} in DB.") # LOG B
+    async with httpx.AsyncClient() as client: 
         await ensure_user_in_db(target_user_id, client)
     
-    if target_user_id not in db_users: # Should be handled by ensure_user_in_db, but defensive check
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Target user could not be ensured in database.")
+    if target_user_id not in db_users: 
+        print(f"PLUGIN_RATINGS: CRITICAL - Target user {target_user_id} NOT IN DB_USERS after ensure call.") # LOG C
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Target user could not be established in database after check.")
+    
+    print(f"PLUGIN_RATINGS: Target user {target_user_id} confirmed in db_users.") # LOG D
 
-    # ... (rest of the score update logic from previous version of this endpoint, using acting_user) ...
     if acting_user.user_id == target_user_id:
         raise HTTPException(status_code=400, detail="Users cannot give credit to themselves.")
 
+    print(f"PLUGIN_RATINGS: Looking for existing credit entry for target {target_user_id}.") # LOG E
     credit_target_entry = None
-    for entry in acting_user.social_credits_given:
+    # Ensure social_credits_given is a list, though Pydantic model should ensure this
+    if not isinstance(acting_user.social_credits_given, list):
+        acting_user.social_credits_given = [] 
+        print(f"PLUGIN_RATINGS: Corrected acting_user.social_credits_given to be a list for user {acting_user.user_id}")
+
+    for entry_idx, entry in enumerate(acting_user.social_credits_given):
         if entry.target_user_id == target_user_id:
             credit_target_entry = entry
+            print(f"PLUGIN_RATINGS: Found existing credit entry.") # LOG F
             break
     
     if not credit_target_entry:
+        print(f"PLUGIN_RATINGS: No existing credit entry found, creating new one for target {target_user_id}.") # LOG G
         credit_target_entry = UserSocialCreditTarget(target_user_id=target_user_id, scores_history=[])
         acting_user.social_credits_given.append(credit_target_entry)
+        print(f"PLUGIN_RATINGS: New credit entry appended. social_credits_given length: {len(acting_user.social_credits_given)}") # LOG H
 
     current_score = 0.0
-    if credit_target_entry.scores_history:
+    if credit_target_entry.scores_history: # This list should always exist due to UserSocialCreditTarget model
         current_score = credit_target_entry.scores_history[-1].score_value
+        print(f"PLUGIN_RATINGS: Current score for {target_user_id} is {current_score}.") # LOG I
+    else:
+        print(f"PLUGIN_RATINGS: No prior score history for {target_user_id}, current_score is 0.") # LOG J
     
     new_score = current_score + rating_data.score_delta
+    print(f"PLUGIN_RATINGS: New calculated score for {target_user_id} is {new_score}.") # LOG K
 
     new_score_entry = ScoreEntry(
         score_value=new_score,
         server_id=rating_data.server_id,
         message_id=rating_data.message_id 
     )
+    # Ensure scores_history list exists on credit_target_entry (Pydantic model default should handle this)
+    if not isinstance(credit_target_entry.scores_history, list):
+        credit_target_entry.scores_history = [] # Should not happen if model is used correctly
+        print(f"PLUGIN_RATINGS: Corrected credit_target_entry.scores_history to be a list for target {target_user_id}")
+
     credit_target_entry.scores_history.append(new_score_entry)
-    print(f"Plugin rating: User {acting_user.user_id} gave {rating_data.score_delta} to {target_user_id} (msg: {rating_data.message_id} on srv: {rating_data.server_id})")
+    print(f"PLUGIN_RATINGS: Appended new score entry. History length: {len(credit_target_entry.scores_history)}") # LOG L
+    
     return credit_target_entry
 
 # MONGO_URI = "mongodb://localhost:27017/"

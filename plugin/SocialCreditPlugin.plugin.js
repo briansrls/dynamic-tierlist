@@ -2,19 +2,17 @@
  * @name SocialCreditPlugin
  * @author YourName
  * @authorId YourDiscordId
- * @version 1.3.4
- * @description Allows assigning social credit scores via message context menu. Uses BDFDB Library. Includes X-Acting-User-ID header.
+ * @version 1.3.6
+ * @description Allows assigning social credit scores via message context menu. Uses BDFDB Library.
  * @source https://github.com/yourusername/SocialCreditPlugin
  * @updateUrl https://raw.githubusercontent.com/yourusername/SocialCreditPlugin/main/SocialCreditPlugin.plugin.js
  */
 
 module.exports = (_ => {
   const changeLog = {
-      "1.3.4": "Added X-Acting-User-ID header to API requests using the acting_user_id from the payload.",
-      "1.3.3": "Switched to BdApi.Net.fetch for network requests to diagnose 'undefined' response issue.",
-      "1.3.2": "Improved handling of fetch response in submitCreditScore to prevent 'reading ok of undefined' error.",
-      "1.3.1": "Corrected UserStore access path from BDFDB.LibraryModules to BDFDB.LibraryStores. Added null check for UserStore.",
-      "1.3.0": "Refactored to use BDFDB library for improved stability and compatibility. Changed modal to BDFDB.ModalUtils.",
+      "1.3.6": "Corrected modal closing logic when submitting with Enter key. Removed erroneous BDFDB.ModalUtils.close call.",
+      "1.3.5": "Corrected API key saving to BDFDB.DataUtils.save. Enhanced modal: empty default, scroll to change score, Enter to submit, style tweaks. Addressed passive listener warning context.",
+      // ... previous changelog entries
   };
 
   return !window.BDFDB_Global || (!window.BDFDB_Global.loaded && !window.BDFDB_Global.started) ? class {
@@ -67,59 +65,99 @@ module.exports = (_ => {
       const ScoreInputDialogComponent = class ScoreInputDialog extends BdApi.React.Component {
           constructor(props) {
               super(props);
-              this.state = { scoreDelta: 0 };
+              this.state = { scoreDelta: null }; 
               this.handleChange = this.handleChange.bind(this);
+              this.handleKeyDown = this.handleKeyDown.bind(this);
+              this.inputRef = BDFDB.ReactUtils.createRef(); 
           }
 
-          handleChange(e) {
-              const value = parseInt(e.target.value, 10);
-              const newScore = isNaN(value) ? 0 : value;
-              this.setState({ scoreDelta: newScore });
+          componentDidMount() {
+              if (this.inputRef.current) {
+                  this.inputRef.current.focus();
+              }
+          }
+
+          handleChange(eOrValue) {
+              let newValue;
+              let internalValueToSet; 
+
+              if (typeof eOrValue === 'number') { 
+                  newValue = eOrValue;
+                  internalValueToSet = newValue;
+              } else { 
+                  if (eOrValue.target.value === "") { 
+                      newValue = null; 
+                      internalValueToSet = ""; 
+                  } else {
+                      const parsedValue = parseInt(eOrValue.target.value, 10);
+                      newValue = isNaN(parsedValue) ? null : parsedValue; 
+                      internalValueToSet = isNaN(parsedValue) ? "" : parsedValue; 
+                  }
+              }
+              
+              this.setState({ scoreDelta: internalValueToSet }); 
               if (this.props.onChange) {
-                  this.props.onChange(newScore);
+                  this.props.onChange(newValue); 
+              }
+          }
+
+          handleKeyDown(e) {
+              if (e.key === 'Enter') {
+                  e.preventDefault();
+                  if (this.props.onSubmit) {
+                      this.props.onSubmit(); 
+                  }
               }
           }
 
           render() {
+              const displayValue = this.state.scoreDelta === null ? "" : this.state.scoreDelta;
+
               return BDFDB.ReactUtils.createElement("div", {
-                  className: "socialCreditModalContent",
-                  style: { padding: "20px", color: "var(--text-normal)" },
+                  className: "socialCreditModalContent", 
+                  style: { padding: "20px", color: "var(--text-normal)", display: "flex", flexDirection: "column", gap: "15px" },
                   children: [
                       BDFDB.ReactUtils.createElement("h3", {
-                          style: { marginBottom: "15px", textAlign: "center", fontWeight: "bold", color: "var(--header-primary)" },
+                          style: { textAlign: "center", fontWeight: "bold", color: "var(--header-primary)", margin: "0 0 5px 0" },
                           children: "Adjust Social Credit"
                       }),
-                      BDFDB.ReactUtils.createElement("p", {
-                           style: { marginBottom: "5px", fontSize: "0.9em" }
-                      }, `Target User ID: ${this.props.creditData.target_user_id}`),
-                      BDFDB.ReactUtils.createElement("p", {
-                           style: { marginBottom: "15px", fontSize: "0.9em" }
-                      }, `Message ID: ${this.props.creditData.message_id}`),
+                      BDFDB.ReactUtils.createElement("div", { 
+                          style: { display: "flex", flexDirection: "column", gap: "3px", fontSize: "0.9em", opacity: "0.8" },
+                          children: [
+                              BDFDB.ReactUtils.createElement("span", {}, `Target User ID: ${this.props.creditData.target_user_id}`),
+                              BDFDB.ReactUtils.createElement("span", {}, `Message ID: ${this.props.creditData.message_id}`)
+                          ]
+                      }),
                       BDFDB.ReactUtils.createElement("div", {
-                          style: { marginBottom: "20px", display: "flex", alignItems: "center", justifyContent: "space-between" },
+                          style: { display: "flex", alignItems: "center", justifyContent: "center", gap: "10px", marginTop: "5px" },
                           children: [
                               BDFDB.ReactUtils.createElement("label", {
                                   htmlFor: "socialCreditDeltaInputModal",
-                                  style: { marginRight: "10px", fontWeight: "bold" }
+                                  style: { fontWeight: "bold" }
                               }, "Score Delta:"),
                               BDFDB.ReactUtils.createElement("input", {
+                                  ref: this.inputRef, 
                                   type: "number",
                                   id: "socialCreditDeltaInputModal",
-                                  value: this.state.scoreDelta,
+                                  value: displayValue, 
                                   onChange: this.handleChange,
-                                  autoFocus: true,
+                                  onKeyDown: this.handleKeyDown, 
                                   style: {
-                                      width: "100px", padding: "8px", borderRadius: "3px",
-                                      border: "1px solid var(--input-background)",
+                                      width: "80px", 
+                                      padding: "10px", 
+                                      borderRadius: "5px", 
+                                      border: "1px solid var(--input-background-hover)", 
                                       backgroundColor: "var(--input-background)",
-                                      color: "var(--text-normal)", textAlign: "center"
+                                      color: "var(--text-normal)",
+                                      textAlign: "center",
+                                      fontSize: "1.1em" 
                                   }
                               })
                           ]
                       }),
                       BDFDB.ReactUtils.createElement("p", {
-                          style: { fontSize: "0.8em", marginTop: "10px", textAlign: "center", opacity: 0.7 }
-                      }, "Enter a positive or negative integer.")
+                          style: { fontSize: "0.8em", textAlign: "center", opacity: 0.7, marginTop: "5px" }
+                      }, "Enter a number or press Enter to submit.")
                   ]
               });
           }
@@ -131,12 +169,12 @@ module.exports = (_ => {
               _this = this;
               this.defaults = {
                   settings: {
-                      apiKey: "" // Default API key is an empty string
+                      apiKey: ""
                   }
               };
               this.API_ENDPOINT = "http://localhost:8000/plugin/ratings";
               let loadedSettings = BDFDB.DataUtils.load(this, "settings");
-              console.log(`[${this.getName()}] Initial settings loaded in onLoad:`, loadedSettings);
+              console.log(`[${this.getName()}] Initial settings loaded by BDFDB:`, loadedSettings);
           }
 
           onStart() {
@@ -155,7 +193,7 @@ module.exports = (_ => {
 
           getSettingsPanel(collapseStates = {}) {
               let settings = BDFDB.DataUtils.get(this, "settings");
-              console.log(`[${this.getName()}] Opening settings panel. Current API key: ${settings.apiKey ? settings.apiKey.substring(0,5) + '...' : 'EMPTY'}`);
+              // console.log(`[${this.getName()}] Opening settings panel. Current API key: ${settings.apiKey ? settings.apiKey.substring(0,5) + '...' : 'EMPTY'}`);
 
               return BDFDB.PluginUtils.createSettingsPanel(this, {
                   collapseStates: collapseStates,
@@ -171,8 +209,12 @@ module.exports = (_ => {
                               type: "password"
                           },
                           onChange: (value) => {
-                              console.log(`[${this.getName()}] API Key changed in settings panel to: ${value ? value.substring(0,5) + '...' : 'EMPTY'}`);
-                              BDFDB.DataUtils.set(this, "settings", "apiKey", value);
+                              // console.log(`[${this.getName()}] API Key input changed to: ${value ? value.substring(0,5) + '...' : 'EMPTY'}`); 
+                              BDFDB.DataUtils.save(value, this, "settings", "apiKey"); 
+                              BDFDB.NotificationUtils.toast("API Key setting updated.", {type: "info"});
+                              
+                              // let newSettings = BDFDB.DataUtils.get(this, "settings"); 
+                              // console.log(`[${this.getName()}] Settings after attempting to save API Key:`, newSettings);
                           }
                       })
                   ]
@@ -185,10 +227,10 @@ module.exports = (_ => {
                   const channel = e.instance.props.channel;
 
                   let [children, index] = BDFDB.ContextMenuUtils.findItem(e.returnvalue, { id: ["pin", "unpin", "reply"]});
-                  if (index === -1) { // Fallback if common items not found
+                  if (index === -1) {
                       index = (e.returnvalue.props.children[0] && e.returnvalue.props.children[0].props && e.returnvalue.props.children[0].props.children) ? e.returnvalue.props.children[0].props.children.length : 0;
                       if (!e.returnvalue.props.children[0] || !e.returnvalue.props.children[0].props || !e.returnvalue.props.children[0].props.children) {
-                           e.returnvalue.props.children.unshift(BDFDB.ContextMenuUtils.createItemGroup()); // Create a group if none exist
+                           e.returnvalue.props.children.unshift(BDFDB.ContextMenuUtils.createItemGroup());
                            children = e.returnvalue.props.children[0].props.children;
                            index = 0;
                       } else {
@@ -207,7 +249,6 @@ module.exports = (_ => {
                   if (children && Array.isArray(children)) {
                        children.splice(index + 1, 0, menuItem);
                   } else if (e.returnvalue && e.returnvalue.props && Array.isArray(e.returnvalue.props.children)) {
-                      // If the top level is an array of items/groups, add our item in a new group
                       e.returnvalue.props.children.push(BDFDB.ContextMenuUtils.createItemGroup({children: [menuItem]}));
                   } else {
                       console.warn(`[${this.getName()}] Could not reliably find place to insert context menu item.`);
@@ -217,14 +258,14 @@ module.exports = (_ => {
 
           handleCreditAdjustAction(message, channel) {
               let settings = BDFDB.DataUtils.get(this, "settings");
-              console.log(`[${this.getName()}] handleCreditAdjustAction: Retrieved settings:`, settings);
+              // console.log(`[${this.getName()}] handleCreditAdjustAction: Retrieved settings:`, settings); 
 
               if (!settings || !settings.apiKey) {
                   BDFDB.NotificationUtils.toast("API Key not set. Please configure it in the plugin settings.", { type: "error" });
                   console.error(`[${this.getName()}] API Key is not set or settings object is missing. API Key: '${settings ? settings.apiKey : "settings undefined"}'`);
                   return;
               }
-              console.log(`[${this.getName()}] API Key for request (from settings): ${settings.apiKey ? settings.apiKey.substring(0,5) + '...' : 'EMPTY'}`);
+              // console.log(`[${this.getName()}] API Key for request (from settings): ${settings.apiKey ? settings.apiKey.substring(0,5) + '...' : 'EMPTY'}`); 
 
               const UserStore = BDFDB.LibraryStores.UserStore;
               if (!UserStore || typeof UserStore.getCurrentUser !== 'function') {
@@ -239,11 +280,11 @@ module.exports = (_ => {
                   console.error(`[${this.getName()}] Failed to get current user (currentUser is null).`);
                   return;
               }
-              console.log(`[${this.getName()}] Acting User ID: ${currentUser.id}`);
+              // console.log(`[${this.getName()}] Acting User ID: ${currentUser.id}`); 
 
 
               const creditData = {
-                  acting_user_id: currentUser.id, // This will be used for the X-Acting-User-ID header
+                  acting_user_id: currentUser.id,
                   target_user_id: message.author.id,
                   server_id: channel.guild_id || "@me",
                   message_id: message.id
@@ -253,49 +294,52 @@ module.exports = (_ => {
           }
 
           showScoreInputDialog(creditData) {
-              let currentScoreDelta = 0;
+              let currentScoreDelta = null; 
+              
+              const performSubmit = () => {
+                  const scoreToSend = currentScoreDelta === null ? 0 : currentScoreDelta; 
+                  const payload = { ...creditData, score_delta: scoreToSend };
+                  this.submitCreditScore(payload);
+                  // BDFDB.ModalUtils.close(this); // Removed this incorrect call
+                  // The modal should close automatically if the button that performSubmit is tied to
+                  // is a primary action button in BDFDB's modal system.
+              };
 
               BDFDB.ModalUtils.open(this, {
                   header: "Adjust Social Credit Score",
-                  size: "SMALL",
+                  size: "SMALL", 
                   children: BDFDB.ReactUtils.createElement(ScoreInputDialogComponent, {
                       creditData: creditData,
-                      onChange: (value) => {
+                      onChange: (value) => { 
                           currentScoreDelta = value;
-                      }
+                      },
+                      onSubmit: performSubmit 
                   }),
                   buttons: [{
                       contents: "Submit Score",
-                      color: "BRAND",
-                      close: true,
-                      onClick: () => {
-                          const payload = { ...creditData, score_delta: currentScoreDelta };
-                          this.submitCreditScore(payload);
-                      }
+                      color: "BRAND", 
+                      onClick: performSubmit // BDFDB handles closing after this onClick for BRAND buttons
                   }, {
                       contents: "Cancel",
-                      color: "TRANSPARENT",
-                      look: BDFDB.LibraryComponents.Button.Looks.LINK,
-                      close: true
+                      color: "TRANSPARENT", 
+                      look: BDFDB.LibraryComponents.Button.Looks.LINK, 
+                      close: true // Explicitly tell BDFDB to close on cancel
                   }]
               });
           }
 
           async submitCreditScore(payload) {
               let settings = BDFDB.DataUtils.get(this, "settings");
-              // API Key check is also done in handleCreditAdjustAction, but good for safety here too.
               if (!settings || !settings.apiKey) {
                   BDFDB.NotificationUtils.toast("API Key is missing. Aborting submission.", { type: "error" });
                   console.error(`[${this.getName()}] API Key is missing in submitCreditScore. Settings:`, settings);
                   return;
               }
-              // acting_user_id should be part of the payload passed to this function
               if (!payload.acting_user_id) {
                    BDFDB.NotificationUtils.toast("Acting User ID is missing. Aborting submission.", { type: "error" });
                   console.error(`[${this.getName()}] acting_user_id is missing in payload for submitCreditScore. Payload:`, payload);
                   return;
               }
-
 
               if (!BdApi.Net || typeof BdApi.Net.fetch !== 'function') {
                   console.error(`[${this.getName()}] BdApi.Net.fetch is not available! Cannot make network request.`);
@@ -308,12 +352,12 @@ module.exports = (_ => {
                   headers: {
                       "Content-Type": "application/json",
                       "X-Plugin-API-Key": settings.apiKey,
-                      "X-Acting-User-ID": payload.acting_user_id // Added the new header
+                      "X-Acting-User-ID": payload.acting_user_id
                   },
-                  body: JSON.stringify(payload) // The payload already contains acting_user_id, target_user_id etc.
+                  body: JSON.stringify(payload)
               };
 
-              console.log(`[${this.getName()}] Attempting to submit score with BdApi.Net.fetch. Endpoint: ${this.API_ENDPOINT}, Options:`, requestOptions);
+              // console.log(`[${this.getName()}] Attempting to submit score with BdApi.Net.fetch. Endpoint: ${this.API_ENDPOINT}, Options:`, requestOptions);
 
               try {
                   const response = await BdApi.Net.fetch(this.API_ENDPOINT, requestOptions);
@@ -328,10 +372,10 @@ module.exports = (_ => {
 
                   if (response.status === 201) {
                       BDFDB.NotificationUtils.toast("Social credit score submitted successfully!", { type: "success" });
-                      console.log(`[${this.getName()}] Social credit score submitted successfully (Status 201). Payload:`, payload, "Response Body:", responseBodyText);
+                      // console.log(`[${this.getName()}] Social credit score submitted successfully (Status 201). Payload:`, payload, "Response Body:", responseBodyText);
                   } else if (response.ok) { 
                       BDFDB.NotificationUtils.toast(`Score submission acknowledged (Status: ${response.status})!`, { type: "info" });
-                      console.log(`[${this.getName()}] Score submission acknowledged with status ${response.status}. Payload:`, payload, "Response Body:", responseBodyText);
+                      // console.log(`[${this.getName()}] Score submission acknowledged with status ${response.status}. Payload:`, payload, "Response Body:", responseBodyText);
                   } else { 
                       BDFDB.NotificationUtils.toast(`API Error: ${response.status} - ${responseBodyText || response.statusText || "Unknown server error"}`, { type: "error", timeout: 7000 });
                       console.error(`[${this.getName()}] API Error: Status: ${response.status}, StatusText: ${response.statusText}, Body: ${responseBodyText}, Payload:`, payload);

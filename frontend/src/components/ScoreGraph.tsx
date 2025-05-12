@@ -17,6 +17,8 @@ export interface ScoreEntry {
   timestamp: number; // Changed to number (epoch milliseconds)
   score_value: number;
   reason?: string | null;
+  server_id?: string | null;   // Added from backend model
+  message_id?: string | null;  // Added from backend model
   // Remove mock data specific fields like sc9_vs_theebis, sc9_vs_vough, user, time
 }
 
