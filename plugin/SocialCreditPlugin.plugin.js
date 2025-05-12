@@ -287,7 +287,9 @@ module.exports = (_ => {
                   acting_user_id: currentUser.id,
                   target_user_id: message.author.id,
                   server_id: channel.guild_id || "@me",
-                  message_id: message.id
+                  channel_id: channel.id,
+                  message_id: message.id,
+                  message_content_snippet: message.content ? message.content.substring(0, 100) : ""
               };
 
               this.showScoreInputDialog(creditData);

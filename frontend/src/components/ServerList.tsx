@@ -13,8 +13,8 @@ interface ServerListProps {
   servers: ServerData[];
   isLoading: boolean;
   error: string | null;
-  selectedServerId: string | null; // Added selectedServerId prop
-  onSelectServer: (id: string) => void; // Added onSelectServer handler prop
+  selectedServerId: string | null;
+  onSelectServer: (id: string) => void;
 }
 
 // Helper to construct Discord icon URL
@@ -91,8 +91,8 @@ const ServerList: React.FC<ServerListProps> = ({ servers, isLoading, error, sele
         <div
           key={server.id}
           className={`server-icon ${selectedServerId === server.id ? 'selected' : ''}`}
-          onClick={() => onSelectServer(server.id)} // Use onSelectServer handler
-          title={server.name} // Re-added title for usability, can be removed if strictly no tooltips
+          onClick={() => onSelectServer(server.id)}
+          title={server.name}
         >
           <div className="server-icon-image-wrapper">
             {server.icon === "global_icon_placeholder" ? (

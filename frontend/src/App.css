@@ -203,12 +203,25 @@
 }
 */
 
+@keyframes mainContentFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px); /* Optional: slight upward movement */
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .main-content-container {
   flex-grow: 1; /* Takes up the remaining space */
   padding: 20px;
   background-color: #36393f; /* Main content area background */
   overflow-y: auto; /* If content overflows */
   position: relative; /* Needed for absolute positioning of children like the search popup */
+  /* Re-apply the fade-in animation */
+  animation: mainContentFadeIn 0.3s ease-out forwards;
 }
 
 /* Remove default CRA styles if they are still there */
@@ -223,16 +236,111 @@
 }
 
 .user-profile-display-container {
-  /* padding: 8px; --- We will control size by width/height and let content center */
   display: flex;
   justify-content: center;
   align-items: center;
   box-sizing: border-box;
-  width: 60px; /* Target size for the clickable area */
+  width: 60px; 
   height: 60px;
-  border-radius: 50%; /* Keep container circular for visual consistency before pic border */
-  /* background-color: #2f3136; */
+  border-radius: 50%;
+  cursor: pointer; 
+  /* Transition only box-shadow on container, border on inner pic */
+  transition: box-shadow 0.8s ease-out;
+  /* border: 2px solid transparent; REMOVE this */ 
 }
+
+.user-profile-display-container .user-profile-pic {
+  width: 50px; 
+  height: 50px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid #43b581; /* Default green border */
+  box-sizing: border-box; 
+  transition: border-color 0.8s ease-out; /* ADD transition for border color */
+}
+
+.user-profile-display-container.armed {
+  /* Container handles the glow */
+  box-shadow: 0 0 8px rgba(240, 71, 71, 0.5), 0 0 12px rgba(240, 71, 71, 0.3);
+  animation: userProfilePulseContainerGlow 2s infinite ease-in-out; /* Renamed for clarity */
+}
+.user-profile-display-container.armed .user-profile-pic {
+  border-color: #f04747; /* Pic has red border */
+  /* Optionally, make the picture's border pulse too, or just the container glow */
+  /* animation: userProfilePulsePicBorder 2s infinite ease-in-out; */
+}
+
+/* Styles for disarming states */
+.user-profile-display-container.disarming-yellow {
+  box-shadow: 0 0 10px rgba(240, 173, 78, 0.6); /* Yellowish container glow */
+  animation: none; /* Stop container glow pulse */
+}
+.user-profile-display-container.disarming-yellow .user-profile-pic {
+  border-color: #f0ad4e; /* Yellow pic border */
+}
+
+.user-profile-display-container.disarming-green {
+  box-shadow: 0 0 8px rgba(92, 184, 92, 0.5); /* Soft green container glow */
+  animation: none; /* Stop container glow pulse */
+}
+.user-profile-display-container.disarming-green .user-profile-pic {
+  border-color: #5cb85c; /* Softer green pic border, transitions to default green */
+}
+
+/* When disarmed (no class on container), pic border transitions to its default #43b581 */
+
+/* Update pulse animation to target container glow */
+@keyframes userProfilePulseContainerGlow { /* Renamed from userProfilePulse */
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(240, 71, 71, 0.5), 0 0 12px rgba(240, 71, 71, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(240, 71, 71, 0.8), 0 0 18px rgba(240, 71, 71, 0.5);
+  }
+}
+
+/* Optional: if you want pic border to pulse too 
+@keyframes userProfilePulsePicBorder {
+  0%, 100% {
+    border-color: #f04747; 
+  }
+  50% {
+    border-color: #ff7f7f; // Lighter red for pulse peak
+  }
+}
+*/
+
+.user-profile-display-container.armed .user-profile-pic {
+  border-color: transparent; /* Hide original green border when armed to avoid double border */
+}
+
+/* Optional: Style for an exclamation mark icon if you add one */
+.logout-exclamation-icon {
+  position: absolute;
+  top: 0px;
+  right: 0px;
+  width: 20px;
+  height: 20px;
+  background-color: #f04747;
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: bold;
+  border: 1px solid #fff; 
+  opacity: 0; /* Start faded out by default */
+  transition: opacity 0.8s ease-out; /* Match parent's transition duration */
+  pointer-events: none; /* Should not be clickable */
+}
+
+.user-profile-display-container.armed .logout-exclamation-icon {
+  opacity: 1; /* Fade in when armed */
+}
+
+/* No specific style needed for .disarming-yellow .logout-exclamation-icon, 
+   as it will transition back to opacity: 0 when .armed class is removed. */
 
 .user-profile-pic {
   width: 50px; 
@@ -313,41 +421,6 @@
   display: flex;
   flex-direction: column; /* Stack profile pic and potential popup */
   align-items: center;
-}
-
-.popup-logout-button {
-  position: absolute;
-  bottom: 65px; /* Position above the UserProfileDisplay (approx 50px height + 8px padding + spacing) */
-  left: 50%;
-  transform: translateX(-50%);
-  background-color: #36393f; /* Dark background, similar to Discord popups */
-  color: #f04747; /* Red text for logout */
-  border: 1px solid #202225; /* Border to distinguish from sidebar */
-  padding: 8px 12px;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  width: auto; /* Fit content */
-  white-space: nowrap;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-  z-index: 10; /* Ensure it's above other elements */
-  opacity: 0; /* Start transparent for animation */
-  transform: translateY(10px) scale(0.95); /* Start slightly down and scaled for animation */
-  animation: popup-appear 0.15s ease-out forwards;
-}
-
-/* We need a keyframe animation to ensure the final state is kept */
-@keyframes popup-appear {
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-.popup-logout-button:hover {
-  background-color: #40444B;
-  color: #ff5f5f;
 }
 
 .loading-app {
@@ -489,8 +562,14 @@
 .tracked-users-container {
   margin-top: 20px;
   padding: 15px;
-  background-color: #2f3136; /* Consistent with search container */
+  background-color: #2f3136; /* Restored solid background */
   border-radius: 8px;
+  /* REMOVE: min-height, height, position: relative, overflow: hidden, box-shadow (if specific to water tank) */
+  /* min-height: 500px; */ 
+  /* height: 70vh; */
+  /* position: relative; */ 
+  /* overflow: hidden; */ 
+  /* box-shadow: 0 4px 15px rgba(0,0,0,0.2); */
 }
 
 .tracked-users-container h3 {
@@ -499,6 +578,8 @@
   border-bottom: 1px solid #4f545c;
   padding-bottom: 10px;
   margin-bottom: 15px;
+  padding: 0;
+  margin: 0;
 }
 
 .tracked-users-list {
@@ -507,16 +588,28 @@
   margin: 0;
 }
 
-.tracked-user-item {
-  display: flex;
+.tracked-user-item { 
+  /* REMOVE position: absolute; */
+  background-color: #36393f; /* Restored original background */
+  border-radius: 4px; /* Restored original border-radius */
+  /* REMOVE transition for top/left */
+  /* transition: top 1.5s ease-out, left 1s ease-out, transform 0.5s ease-out; */
+  /* REMOVE animation: bobbing */
+  /* animation: bobbing 3s infinite ease-in-out; */
+  /* Ensure standard list item display */
+  display: flex; 
   align-items: center;
-  padding: 10px;
-  margin-bottom: 8px;
-  background-color: #36393f; /* Consistent with search items */
-  border-radius: 4px;
+  padding: 10px; /* Restored original padding */
+  margin-bottom: 8px; /* Added back margin for list items */
+  /* min-width: 200px; REMOVE if not needed for standard list */
+  /* width: auto; REMOVE if not needed for standard list */
 }
 
-.tracked-user-avatar {
+.tracked-user-item:hover {
+  background-color: #3e4248; /* Keep hover effect */
+}
+
+.tracked-user-avatar { 
   width: 32px; /* Slightly smaller for a list item */
   height: 32px;
   border-radius: 50%;
@@ -525,10 +618,16 @@
 }
 
 .tracked-user-username {
-  flex-grow: 1;
-  color: #dcddde; /* Standard text color */
+  flex-grow: 0;
+  flex-shrink: 0; /* Prevent shrinking too much if space is tight */
+  flex-basis: 180px; /* Define a base width */
+  min-width: 120px;  /* Ensure it doesn't get too small */
+  color: #dcddde; 
   font-size: 15px;
-  margin-right: 10px; /* Add some space before icons/buttons */
+  margin-right: 10px; /* Space before server icons/actions */
+  white-space: nowrap;   /* Handle long names */
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tracked-user-server-icons {
@@ -655,69 +754,43 @@
   cursor: not-allowed;
 }
 
-/* --- Graph Display Area --- */
-.graph-display-area {
-  margin-bottom: 20px;
-  padding: 15px;
-  background-color: #2f3136; /* Consistent with other containers */
-  border-radius: 8px;
-  min-height: 550px; /* Ensure it doesn't collapse when loading/empty */
-  display: flex; /* To help center content like loading/error messages */
-  flex-direction: column;
-  /* justify-content: center; */ /* Remove or use align-items if ScoreGraph is not full height */
-}
-
-/* --- Graph Specific Loading/Error Styles --- */
-.graph-loading,
-.graph-error {
-  padding: 15px;
-  margin-top: 15px;
-  margin-bottom: 15px;
-  border-radius: 4px;
-  text-align: center;
-  color: #dcddde;
-  background-color: #2f3136; /* Consistent with other containers */
-}
-
-.graph-error {
-  background-color: rgba(240, 71, 71, 0.15); /* Softer error background */
-  color: #f04747; /* Discord Red */
-  border: 1px solid rgba(240, 71, 71, 0.3);
-}
-
 /* --- Login Screen Styles --- */
 .login-screen-container {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
+  /* flex-direction: column; */ /* No longer needed if only one child */
+  /* justify-content: center; */ /* No longer needed for absolute child */
+  /* align-items: center; */   /* No longer needed for absolute child */
   height: 100vh;
   background-color: #36393f; /* Discord dark background */
   color: #dcddde;
-  text-align: center;
+  /* text-align: center; */ /* Not needed */
   padding: 20px;
+  position: relative; /* ADD THIS */
+  overflow: hidden;   /* ADD THIS */
 }
 
-.login-prompt h2 {
-  font-size: 2.5em;
-  margin-bottom: 0.5em;
-  color: #fff;
-}
-
-.login-prompt p {
-  font-size: 1.2em;
-  margin-bottom: 1.5em;
-  color: #b9bbbe; /* Lighter grey for subtitle */
-}
+/* Removed .login-prompt h2 and .login-prompt p styles */
 
 .login-icon-button.large {
   width: 100px; /* Larger button */
   height: 100px;
   border-radius: 50%;
   background-color: #5865F2; /* Discord Blurple */
-  border: none; /* Remove border for a flatter look */
-  box-shadow: 0 4px 15px rgba(0,0,0,0.2); /* Softer shadow */
-  transition: transform 0.2s ease-out, background-color 0.2s ease-out; /* Smooth transitions */
+  border: none;
+  /* box-shadow will be handled by animation */
+  transition: transform 0.2s ease-out, background-color 0.2s ease-out; /* Keep hover transitions */
+  cursor: pointer; /* Ensure cursor indicates clickability */
+
+  /* Added for wandering effect */
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%); /* Center the button initially */
+
+  /* Apply animations - changed wander timing, increased duration to 80s, removed alternate */
+  animation:
+    radiateLight 3s infinite ease-in-out,
+    wander 80s infinite ease-in-out; /* CHANGED duration from 60s to 80s */
 }
 
 .login-icon-button.large svg {
@@ -727,8 +800,41 @@
 }
 
 .login-icon-button.large:hover {
+  /* Keep hover effects, but adjust scale if needed */
   background-color: #4f5bda; /* Slightly darker Blurple */
-  transform: scale(1.1); /* Enlarge on hover */
+  transform: translate(-50%, -50%) scale(1.1); /* Adjust transform to account for absolute positioning */
+  /* Reset animation state on hover if it interferes, or adjust hover effect */
+  /* animation-play-state: paused; */ /* Example: pause animation on hover */
+}
+
+/* --- Keyframes for Login Button Animations --- */
+@keyframes radiateLight {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(88, 101, 242, 0.2),
+                0 0 20px rgba(88, 101, 242, 0.15),
+                0 0 30px rgba(88, 101, 242, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(88, 101, 242, 0.6),
+                0 0 35px rgba(88, 101, 242, 0.4),
+                0 0 50px rgba(88, 101, 242, 0.3);
+  }
+}
+
+@keyframes wander {
+  /* Note: transform includes translate(-50%, -50%) to keep the button centered on its initial 50%/50% top/left */
+  /* Movement is now done via additional translateX/translateY */
+  0%   { transform: translate(-50%, -50%) rotate(0deg) scale(1); }
+  10%  { transform: translate(calc(-50% + 2vw), calc(-50% - 2vh)) rotate(5deg) scale(1.02); }  /* Right 2vw, Up 2vh */
+  20%  { transform: translate(calc(-50% + 3vw), -50%) rotate(-3deg) scale(1); }             /* Right 3vw, Center Y */
+  30%  { transform: translate(calc(-50% + 2vw), calc(-50% + 2vh)) rotate(8deg) scale(1.03); }  /* Right 2vw, Down 2vh */
+  40%  { transform: translate(-50%, calc(-50% + 3vh)) rotate(-5deg) scale(1); }             /* Center X, Down 3vh */
+  50%  { transform: translate(calc(-50% - 2vw), calc(-50% + 2vh)) rotate(2deg) scale(1.01); }  /* Left 2vw, Down 2vh */
+  60%  { transform: translate(calc(-50% - 3vw), -50%) rotate(-8deg) scale(1); }             /* Left 3vw, Center Y */
+  70%  { transform: translate(calc(-50% - 2vw), calc(-50% - 3vh)) rotate(10deg) scale(1.04); } /* Left 2vw, Up 3vh */
+  80%  { transform: translate(-50%, calc(-50% - 4vh)) rotate(-2deg) scale(1); }             /* Center X, Up 4vh */
+  90%  { transform: translate(calc(-50% + 1vw), calc(-50% - 2vh)) rotate(4deg) scale(1.02); }  /* Right 1vw, Up 2vh */
+  100% { transform: translate(-50%, -50%) rotate(0deg) scale(1); }
 }
 
 /* --- Pure CSS Spinner --- */
@@ -748,9 +854,9 @@
 }
 
 /* Force Recharts SVG surface to allow overflow for custom dots */
-.recharts-surface {
+/* .recharts-surface {
   overflow: visible !important;
-}
+} */
 
 /* --- Modal Styles --- */
 .modal-overlay {
@@ -1138,94 +1244,70 @@
 }
 */
 
-/* --- Main Content Area Header (Optional) --- */
-.main-content-header {
-  display: flex;
-  justify-content: flex-end; /* Align items (like search icon) to the right */
-  margin-bottom: 15px; /* Space below the header */
-  /* Add padding or other styles if needed */
-}
-
-.search-toggle-button {
-  /* Inherits from .icon-button */
-  padding: 6px; /* Adjust padding if needed */
-  position: relative; /* Needed for z-index */
-  z-index: 11; /* Ensure button is above the popup */
-  margin-left: auto; /* Push button to the far right if header uses flex-start */
-}
-
-.search-toggle-button svg {
-  fill: #b9bbbe; /* Discord medium-grey icon color */
-  width: 20px;   /* Match SVG size */
-  height: 20px;
-}
-
-.search-toggle-button:hover svg {
-  fill: #fff; /* White on hover */
-}
-
-/* --- User Search Popup Styles --- */
-.user-search-popup {
-  position: absolute;
-  top: 8px; /* Closer to the header */
-  right: 15px; /* Align near the right edge (near button) */
-  max-width: 350px; /* Slightly smaller max-width */
-  width: 90%; 
-  z-index: 10; 
+/* --- Tier List Styles (New Basic Placeholders) --- */
+.tier-list-container { /* You might rename .tracked-users-container to this or add a new one */
+  margin-top: 20px;
+  padding: 15px;
   background-color: #2f3136; 
-  padding: 10px; /* Reduced padding */
-  border-radius: 8px; 
-  box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-  opacity: 0;
-  transform: translateX(-105%); /* Start off-screen to the left */
-  transition: opacity 0.3s ease-out, transform 0.3s ease-out;
-  pointer-events: none; 
+  border-radius: 8px;
 }
 
-.user-search-popup.visible {
-  opacity: 1;
-  transform: translateX(0); /* Slide in from the left */
-  pointer-events: auto; 
+.tier-list-container h3 {
+  margin-top: 0;
+  color: #fff;
+  border-bottom: 1px solid #4f545c;
+  padding-bottom: 10px;
+  margin-bottom: 15px;
 }
 
-/* --- ScoreGraph Tooltip Customization --- */
-.custom-tooltip {
-  background-color: rgba(47, 49, 54, 0.9); /* Slightly transparent dark background */
-  border: 1px solid #202225;
+.tier-list {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+.tier-list-item {
+  display: flex;
+  align-items: center;
   padding: 10px;
-  border-radius: 5px;
-  color: #dcddde; /* Light text */
-  font-size: 0.9em;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-}
-
-.custom-tooltip .label {
-  font-weight: bold;
   margin-bottom: 8px;
-  color: #fff; /* White label */
+  background-color: #36393f; 
+  border-radius: 4px;
+  /* Add transitions for potential reordering animations later */
+  transition: background-color 0.2s ease-in-out;
 }
 
-.custom-tooltip .intro {
-  margin-bottom: 5px;
+.tier-list-item:hover {
+  background-color: #3e4248;
 }
 
-.custom-tooltip .reason,
-.custom-tooltip .message-snippet,
-.custom-tooltip .message-id {
-  margin-top: 5px;
-  font-size: 0.9em;
-  opacity: 0.8; /* Slightly dimmer */
+.tier-list-avatar {
+  width: 40px; /* Slightly larger than before */
+  height: 40px;
+  border-radius: 50%;
+  margin-right: 12px;
+  object-fit: cover;
 }
 
-.custom-tooltip .message-snippet {
-  font-style: italic;
-  max-width: 300px; /* Prevent overly wide tooltips */
-  word-wrap: break-word; /* Wrap long snippets */
+.tier-list-username {
+  flex-grow: 1;
+  color: #dcddde; 
+  font-size: 16px; /* Slightly larger */
+  font-weight: 500;
 }
 
-/* Optional: Style for copyable IDs or links if added later */
-
-/* Force Recharts SVG surface to allow overflow for custom dots */
-.recharts-surface {
-  overflow: visible !important;
+.tier-list-score {
+  margin-left: auto; /* Push score to the right before actions */
+  margin-right: 15px;
+  font-weight: bold;
+  font-size: 1.1em;
+  min-width: 80px; /* Give some space for score text */
+  text-align: right;
 }
+
+/* Tier-specific styles can be added later, e.g. based on score ranges */
+/* .tier-s { background-color: #ff7eb9; } */
+/* .tier-a { background-color: #ffae59; } */
+/* .tier-f { background-color: #7a8a99; } */
+
+/* Reuse .tracked-user-actions if the buttons are similar */

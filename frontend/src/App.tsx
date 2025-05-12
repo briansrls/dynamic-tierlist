@@ -25,6 +25,12 @@ export interface AppUser {
 
 export const GLOBAL_VIEW_SERVER_ID = 'global_view_all_tracked';
 
+// Define the new response structure for rated users (matches backend)
+interface RatedUserProfileResponse {
+  profile: UserProfile;
+  current_score: number;
+}
+
 // Main layout component
 const MainLayout: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
@@ -33,20 +39,37 @@ const MainLayout: React.FC = () => {
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [isLoadingServers, setIsLoadingServers] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
-  const [showLogoutPrompt, setShowLogoutPrompt] = useState(false);
+  type LogoutStateType = 'disarmed' | 'armed' | 'disarming-yellow' | 'disarming-green';
+  const [logoutState, setLogoutState] = useState<LogoutStateType>('disarmed');
   const [minimumLoadTimePassed, setMinimumLoadTimePassed] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
 
-  // --- State lifted from MainContent ---
-  const [trackedUsers, setTrackedUsers] = useState<UserProfile[]>([]);
-  const [isLoadingTrackedUsers, setIsLoadingTrackedUsers] = useState(false);
-  const [trackedUsersError, setTrackedUsersError] = useState<string | null>(null);
-  // --- End lifted state ---
+  // --- Ref for auto-disarm timer --- ADD THIS
+  const logoutArmedTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const logoutTransitionTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // --- Function to clear timers (moved outside useEffect) --- ADD THIS
+  const clearAllLogoutTimers = useCallback(() => {
+    if (logoutArmedTimerRef.current) {
+      clearTimeout(logoutArmedTimerRef.current);
+      logoutArmedTimerRef.current = null;
+    }
+    if (logoutTransitionTimerRef.current) {
+      clearTimeout(logoutTransitionTimerRef.current);
+      logoutTransitionTimerRef.current = null;
+    }
+  }, []); // Empty dependency array because it only uses refs
+  // --- End function to clear timers ---
+
+  // --- State for rated users data (replaces trackedUsers) --- 
+  const [ratedUsersData, setRatedUsersData] = useState<RatedUserProfileResponse[]>([]);
+  const [isLoadingRatedUsers, setIsLoadingRatedUsers] = useState(false);
+  const [ratedUsersError, setRatedUsersError] = useState<string | null>(null);
+  // --- End state for rated users data ---
 
   // Refs for click-outside logic
   const profileAreaRef = React.useRef<HTMLDivElement>(null); // For the .user-actions-area
-  const logoutButtonRef = React.useRef<HTMLButtonElement>(null); // For the .popup-logout-button
 
   const fetchUserServers = useCallback(async (token: string) => {
     setIsLoadingServers(true);
@@ -77,21 +100,22 @@ const MainLayout: React.FC = () => {
     setIsLoadingServers(false);
   }, []);
 
-  // --- fetchTrackedUsers lifted from MainContent ---
-  const fetchTrackedUsers = useCallback(async () => {
+  // --- Updated fetchRatedUsersData function --- 
+  const fetchRatedUsersData = useCallback(async () => {
     if (!currentUser) {
-      setTrackedUsers([]);
+      setRatedUsersData([]);
       return;
     }
-    setIsLoadingTrackedUsers(true);
-    setTrackedUsersError(null);
+    setIsLoadingRatedUsers(true);
+    setRatedUsersError(null);
     const token = localStorage.getItem('app_access_token');
     if (!token) {
-      setTrackedUsersError("Authentication token not found.");
-      setIsLoadingTrackedUsers(false);
+      setRatedUsersError("Authentication token not found.");
+      setIsLoadingRatedUsers(false);
       return;
     }
     try {
+      // Fetch from the updated endpoint, expecting RatedUserProfileResponse[]
       const response = await fetch(`http://localhost:8000/users/${currentUser.user_id}/rated-users`, {
         headers: { 'Authorization': `Bearer ${token}` },
       });
@@ -99,17 +123,17 @@ const MainLayout: React.FC = () => {
         const errorData = await response.json();
         throw new Error(errorData.detail || `Error: ${response.status}`);
       }
-      const users: UserProfile[] = await response.json();
-      setTrackedUsers(users);
+      const usersData: RatedUserProfileResponse[] = await response.json();
+      setRatedUsersData(usersData);
     } catch (err: any) {
-      console.error("Error fetching all rated users:", err);
-      setTrackedUsersError(err.message || "Failed to fetch rated users.");
-      setTrackedUsers([]);
+      console.error("Error fetching rated users data:", err);
+      setRatedUsersError(err.message || "Failed to fetch rated users data.");
+      setRatedUsersData([]);
     } finally {
-      setIsLoadingTrackedUsers(false);
+      setIsLoadingRatedUsers(false);
     }
   }, [currentUser?.user_id]);
-  // --- End lifted fetchTrackedUsers ---
+  // --- End updated fetchRatedUsersData ---
 
   const fetchCurrentUser = useCallback(async (token: string) => {
     // console.log("APP: fetchCurrentUser called with token:", token);
@@ -137,7 +161,7 @@ const MainLayout: React.FC = () => {
         setUserServers([]);
         setServerError(null);
         setSelectedServerId(GLOBAL_VIEW_SERVER_ID);
-        setShowLogoutPrompt(false);
+        setLogoutState('disarmed');
         setIsLoggingOut(false);
       }
     } catch (error) {
@@ -147,7 +171,7 @@ const MainLayout: React.FC = () => {
       setUserServers([]);
       setServerError(null);
       setSelectedServerId(GLOBAL_VIEW_SERVER_ID);
-      setShowLogoutPrompt(false);
+      setLogoutState('disarmed');
       setIsLoggingOut(false);
     }
     setIsLoadingAuth(false);
@@ -193,52 +217,84 @@ const MainLayout: React.FC = () => {
     };
   }, []); // Empty dependency array makes this run only once on mount and clean up on unmount
 
-  // Effect for handling clicks outside the logout prompt
+  // Effect for handling clicks outside & auto-disarm/transition logic
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      // If the logout prompt is shown and the click is outside the user-actions-area (which contains the profile pic and the popup button)
-      if (showLogoutPrompt && profileAreaRef.current && !profileAreaRef.current.contains(event.target as Node) && !logoutButtonRef.current?.contains(event.target as Node)) {
-        setShowLogoutPrompt(false);
+      if (profileAreaRef.current && !profileAreaRef.current.contains(event.target as Node)) {
+        if (logoutState === 'armed') {
+          console.log("Logout disarmed by click outside (to yellow)");
+          clearAllLogoutTimers(); // USE new function
+          setLogoutState('disarming-yellow');
+        }
       }
     };
 
-    if (showLogoutPrompt) {
+    if (logoutState === 'armed') {
       document.addEventListener('mousedown', handleClickOutside);
-    } else {
+      clearAllLogoutTimers(); // USE new function
+      logoutArmedTimerRef.current = setTimeout(() => {
+        console.log("Auto-disarming from armed to yellow after 5s");
+        setLogoutState('disarming-yellow');
+      }, 5000);
+    } else if (logoutState === 'disarming-yellow') {
       document.removeEventListener('mousedown', handleClickOutside);
+      clearAllLogoutTimers(); // USE new function
+      logoutTransitionTimerRef.current = setTimeout(() => {
+        console.log("Transitioning from yellow to green");
+        setLogoutState('disarming-green');
+      }, 1000);
+    } else if (logoutState === 'disarming-green') {
+      document.removeEventListener('mousedown', handleClickOutside);
+      clearAllLogoutTimers(); // USE new function
+      logoutTransitionTimerRef.current = setTimeout(() => {
+        console.log("Transitioning from green to disarmed");
+        setLogoutState('disarmed');
+      }, 1000);
+    } else { // 'disarmed' state
+      document.removeEventListener('mousedown', handleClickOutside);
+      clearAllLogoutTimers(); // USE new function
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      clearAllLogoutTimers(); // USE new function
     };
-  }, [showLogoutPrompt]);
+  }, [logoutState, clearAllLogoutTimers]); // ADD clearAllLogoutTimers to dependencies
 
-  // Effect to fetch tracked users when currentUser or its user_id changes
+  // Effect to fetch rated users data when currentUser changes
   useEffect(() => {
     if (currentUser?.user_id) {
-      fetchTrackedUsers();
+      fetchRatedUsersData();
     } else {
-      setTrackedUsers([]);
+      setRatedUsersData([]); // Clear data if no user
     }
-  }, [currentUser?.user_id, fetchTrackedUsers]);
+  }, [currentUser?.user_id, fetchRatedUsersData]);
 
   const handleLogin = () => {
     window.location.href = 'http://localhost:8000/auth/discord/login';
   };
 
   const handleProfileClick = () => {
-    setShowLogoutPrompt(prev => !prev);
+    clearAllLogoutTimers(); // USE new function
+    if (logoutState === 'armed') {
+      handleLogout();
+    } else if (logoutState === 'disarmed') {
+      setLogoutState('armed');
+    } else {
+      setLogoutState('armed');
+    }
   };
 
   const handleLogout = () => {
+    clearAllLogoutTimers(); // USE new function
+    setLogoutState('disarmed');
     setIsLoggingOut(true);
     setTimeout(() => {
       localStorage.removeItem('app_access_token');
       setCurrentUser(null);
       setUserServers([]);
       setServerError(null);
-      setSelectedServerId(GLOBAL_VIEW_SERVER_ID); // Reset to global on logout
-      setShowLogoutPrompt(false);
+      setSelectedServerId(GLOBAL_VIEW_SERVER_ID);
       setIsLoggingOut(false);
     }, 500);
   };
@@ -250,16 +306,15 @@ const MainLayout: React.FC = () => {
   const displayedUserServers = React.useMemo(() => {
     const serversWithCounts: ServerData[] = userServers.map(server => {
       if (server.id === GLOBAL_VIEW_SERVER_ID) {
-        // For global view, count is total unique tracked users
-        // Or, we could just not show a count for global, or show total tracked users.
-        // Let's show total unique tracked users for global for now.
-        return { ...server, trackedUserCount: trackedUsers.length };
+        return { ...server, trackedUserCount: ratedUsersData.length }; // Count based on new data
       }
-      // For actual servers, count users associated with this server_id
       let count = 0;
-      if (trackedUsers && trackedUsers.length > 0) {
-        trackedUsers.forEach(user => {
-          if (user.associatedServerIds?.includes(server.id)) {
+      if (ratedUsersData && ratedUsersData.length > 0) {
+        // This server association logic needs review. 
+        // DiscordUserProfile (part of RatedUserProfileResponse) has associatedServerIds.
+        // We need to check against `item.profile.associatedServerIds`
+        ratedUsersData.forEach(item => {
+          if (item.profile.associatedServerIds?.includes(server.id)) {
             count++;
           }
         });
@@ -271,13 +326,13 @@ const MainLayout: React.FC = () => {
       return serversWithCounts; // Show all (with potential zero counts) if not logged in but servers were somehow loaded
     }
     // If user is logged in but has no tracked users yet, show all their servers with 0 counts (except global)
-    if (trackedUsers.length === 0 && currentUser) {
+    if (ratedUsersData.length === 0 && currentUser) {
       return serversWithCounts;
     }
 
     const activeServerIds = new Set<string>();
-    trackedUsers.forEach(user => {
-      user.associatedServerIds?.forEach((serverId: string) => activeServerIds.add(serverId));
+    ratedUsersData.forEach(item => {
+      item.profile.associatedServerIds?.forEach((serverId: string) => activeServerIds.add(serverId));
     });
 
     const filtered = serversWithCounts.filter(server =>
@@ -291,7 +346,7 @@ const MainLayout: React.FC = () => {
 
     return globalView ? [globalView, ...otherServers] : otherServers;
 
-  }, [userServers, trackedUsers, currentUser]);
+  }, [userServers, ratedUsersData, currentUser]);
   // --- End Calculate displayedUserServers ---
 
   // 1. Initial Loading Phase (Auth check or minimum display time not passed)
@@ -307,15 +362,10 @@ const MainLayout: React.FC = () => {
   if (!currentUser) { // isLoadingAuth is false, minimumLoadTimePassed is true
     return (
       <div className="login-screen-container">
-        <div className="login-prompt">
-          {/* Optional: Add a logo or app name here */}
-          <h2>Welcome to Social Credit Tracker</h2>
-          <p>Please log in with Discord to continue.</p>
-          <div onClick={handleLogin} className="login-icon-button large"> {/* Added 'large' class for styling */}
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="48px" height="48px"> {/* Increased size */}
-              <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-            </svg>
-          </div>
+        <div onClick={handleLogin} className="login-icon-button large"> {/* Added 'large' class for styling */}
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="48px" height="48px"> {/* Increased size */}
+            <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+          </svg>
         </div>
       </div>
     );
@@ -351,22 +401,14 @@ const MainLayout: React.FC = () => {
               </svg>
             </button>
           </div>
-          <div className="user-actions-area" ref={profileAreaRef}> {/* Assign ref to the wrapper */}
+          <div className="user-actions-area" ref={profileAreaRef}>
             {currentUser ? (
               <>
-                {showLogoutPrompt && (
-                  <button
-                    onClick={handleLogout}
-                    className="popup-logout-button"
-                    ref={logoutButtonRef} // Assign ref to the button
-                  >
-                    Logout
-                  </button>
-                )}
                 <UserProfileDisplay
                   username={currentUser.username}
                   profilePicUrl={currentUser.profilePicUrl || ''}
                   onClick={handleProfileClick}
+                  logoutState={logoutState}
                 />
               </>
             ) : (
@@ -380,14 +422,13 @@ const MainLayout: React.FC = () => {
         </div>
       </div>
       <MainContent
+        key={selectedServerId || 'global'}
         selectedServerId={selectedServerId}
         currentUser={currentUser}
-        userServers={userServers}
+        userServers={displayedUserServers}
         globalViewServerId={GLOBAL_VIEW_SERVER_ID}
-        trackedUsers={trackedUsers}
-        isLoadingTrackedUsers={isLoadingTrackedUsers}
-        trackedUsersError={trackedUsersError}
-        refreshTrackedUsers={fetchTrackedUsers}
+        ratedUsersData={ratedUsersData}
+        refreshRatedUsersData={fetchRatedUsersData}
       />
       {isSettingsModalOpen && (
         <SettingsModal

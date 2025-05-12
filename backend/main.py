@@ -61,18 +61,10 @@ app.add_middleware(
 
 # --- Pydantic Models ---
 
-class ScoreEntry(BaseModel):
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    score_value: float  # Absolute score at this timestamp
-    reason: Optional[str] = None
-    server_id: Optional[str] = None   # Context from plugin
-    channel_id: Optional[str] = None  # Context from plugin
-    message_id: Optional[str] = None  # Context from plugin
-    message_content_snippet: Optional[str] = None # Added: Snippet from plugin
-
 class UserSocialCreditTarget(BaseModel):
     target_user_id: str
-    scores_history: List[ScoreEntry] = []
+    current_score: float = 0.0
+    associated_server_ids: List[str] = Field(default_factory=list)
 
 # Simplified server info to be stored with the user or fetched
 class UserServerInfo(BaseModel):
@@ -141,6 +133,12 @@ class PluginRatingCreate(BaseModel):
 class PluginApiKeyResponse(BaseModel):
     api_key: str
     generated_at: datetime
+
+# --- NEW Response Model --- ADD THIS
+class RatedUserProfileResponse(BaseModel):
+    profile: DiscordUserProfile
+    current_score: float
+# --- End New Response Model --- 
 
 # --- In-Memory Database ---
 # For now, we'll use dictionaries to simulate MongoDB collections.
@@ -487,91 +485,34 @@ async def give_social_credit(
     # Find or create the social credit target entry within the acting user's document
     social_credits_given = acting_user_dict.get("social_credits_given", [])
     target_entry = None
-    target_entry_index = -1
-    for i, entry in enumerate(social_credits_given):
+    for entry in social_credits_given:
         if entry.get("target_user_id") == target_user_id:
             target_entry = entry
-            target_entry_index = i
             break
 
     # If no existing entry for this target, create a new one
     if target_entry is None:
         target_entry = {
             "target_user_id": target_user_id,
-            "scores_history": []
+            "current_score": 0.0 # Initialize current_score
         }
         social_credits_given.append(target_entry)
-        target_entry_index = len(social_credits_given) - 1 # It's now the last element
+        # No need to update target_entry_index here, direct modification of target_entry is fine
 
     # Calculate the new absolute score
-    last_score = target_entry["scores_history"][-1]["score_value"] if target_entry["scores_history"] else 0
-    new_score = last_score + update_request.score_delta
+    # If target_entry was just created, current_score is 0.0. 
+    # For existing entries, default to 0.0 if current_score is missing.
+    existing_score = target_entry.get("current_score", 0.0)
+    new_score = existing_score + update_request.score_delta
 
-    # Create the new score history entry
-    new_score_entry = ScoreEntry(
-        score_value=new_score,
-        reason=update_request.reason,
-        server_id=update_request.server_id,
-        channel_id=update_request.channel_id,
-        message_id=update_request.message_id,
-        message_content_snippet=update_request.message_content_snippet
-    ).model_dump() # Convert Pydantic model to dict for DB
-
-    # Append the new score entry to the history
-    target_entry["scores_history"].append(new_score_entry)
+    # Update the current_score directly in the target_entry
+    target_entry["current_score"] = new_score
+    # The reason from update_request is not stored in this model anymore
 
     # Update the acting user's document in the database
-    # We need to update the specific element in the social_credits_given array
-    # or the whole array if it was newly created.
     await db_upsert_user(acting_user_dict) # Upsert the whole user doc with updated credits
 
     # Return the updated target entry (convert back to Pydantic model)
-    return UserSocialCreditTarget(**target_entry)
-
-@app.delete("/users/{acting_user_id}/credit/{target_user_id}/latest", response_model=UserSocialCreditTarget)
-async def delete_latest_social_credit_entry(
-    acting_user_id: str, 
-    target_user_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Deletes the most recent score entry given by the acting_user to the target_user.
-    """
-    if acting_user_id != current_user.user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Acting user ID does not match authenticated user"
-        )
-
-    # Fetch the acting user's data
-    acting_user_dict = await db_get_user(acting_user_id)
-    if not acting_user_dict:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Acting user not found")
-
-    social_credits_given = acting_user_dict.get("social_credits_given", [])
-    target_entry = None
-    target_entry_found = False
-
-    for entry in social_credits_given:
-        if entry.get("target_user_id") == target_user_id:
-            target_entry = entry
-            target_entry_found = True
-            break
-
-    if not target_entry_found:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No credit history found for target user {target_user_id}")
-
-    if not target_entry.get("scores_history"):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No score entries to delete")
-
-    # Remove the last entry from the scores history
-    deleted_entry = target_entry["scores_history"].pop()
-    print(f"Deleted score entry: {deleted_entry}")
-
-    # Update the user document in the database
-    await db_upsert_user(acting_user_dict)
-
-    # Return the modified target entry
     return UserSocialCreditTarget(**target_entry)
 
 @app.delete("/users/{acting_user_id}/tracking/{target_user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -999,22 +940,25 @@ async def create_rating_from_plugin(
             break
 
     if target_entry is None:
-        target_entry = {"target_user_id": target_user_id, "scores_history": []}
+        target_entry = {
+            "target_user_id": target_user_id, 
+            "current_score": 0.0, # Initialize current_score
+            "associated_server_ids": [] # Initialize new field
+        }
         social_credits_given.append(target_entry)
 
-    last_score = target_entry["scores_history"][-1]["score_value"] if target_entry["scores_history"] else 0
-    new_score = last_score + score_delta
+    # For existing entries, default to 0.0 if current_score is missing.
+    existing_score = target_entry.get("current_score", 0.0)
+    new_score = existing_score + score_delta
 
-    new_score_entry = ScoreEntry(
-        score_value=new_score,
-        server_id=server_id,   # Add context from plugin
-        channel_id=channel_id, # Add context from plugin
-        message_id=message_id, # Add context from plugin
-        # timestamp added by default
-        # Reason is optional/not included per PluginRatingCreate model
-    ).model_dump()
-
-    target_entry["scores_history"].append(new_score_entry)
+    target_entry["current_score"] = new_score
+    
+    # Add server_id to associated_server_ids if it's not already there
+    # This happens specifically for plugin ratings which have server_id context
+    current_associated_servers = target_entry.get("associated_server_ids", [])
+    if server_id not in current_associated_servers:
+        current_associated_servers.append(server_id)
+    target_entry["associated_server_ids"] = current_associated_servers
 
     # Update the acting user's document in the database with new score AND potentially new server
     await db_upsert_user(acting_user_dict)
@@ -1022,13 +966,13 @@ async def create_rating_from_plugin(
     # Return the updated target entry
     return UserSocialCreditTarget(**target_entry)
 
-@app.get("/users/{acting_user_id}/rated-users", response_model=List[DiscordUserProfile])
+@app.get("/users/{acting_user_id}/rated-users", response_model=List[RatedUserProfileResponse])
 async def get_rated_users(
     acting_user_id: str,
     current_user: User = Depends(get_current_user) # Authenticated user
 ):
     """
-    Gets profiles of all users that the acting_user_id has rated.
+    Gets profiles and current scores of all users that the acting_user_id has rated.
     """
     if acting_user_id != current_user.user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot fetch rated users for another user")
@@ -1039,63 +983,52 @@ async def get_rated_users(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Acting user not found")
 
     social_credits_given = acting_user_dict.get("social_credits_given", [])
-    # target_user_ids = {entry["target_user_id"] for entry in social_credits_given if "target_user_id" in entry}
-
-    # if not target_user_ids:
-    #     return []
     
-    rated_user_profiles = []
+    rated_user_data_list = []
     # Iterate through each user the acting_user has rated
     for credit_entry in social_credits_given:
         target_id = credit_entry.get("target_user_id")
+        current_score = credit_entry.get("current_score", 0.0) # Get the score
+        # Get the associated server IDs for this specific target rating
+        associated_server_ids_for_target = credit_entry.get("associated_server_ids", [])
         if not target_id:
             continue
 
-        # Collect unique server_ids from this target_id's score history within this credit_entry
-        associated_server_ids_for_this_target = set()
-        if "scores_history" in credit_entry:
-            for score_entry in credit_entry["scores_history"]:
-                if score_entry.get("server_id"):
-                    associated_server_ids_for_this_target.add(score_entry["server_id"])
-        
-        # Fetch the profile for this target_id
         target_user_dict = await db_get_user(target_id)
-        profile = None
+        profile_data = None
         if target_user_dict:
-            # Construct profile from DB data
-             profile = DiscordUserProfile(
+            profile_data = DiscordUserProfile(
                 id=target_user_dict['user_id'],
                 username=target_user_dict['username'],
                 discriminator="0000", # Placeholder
                 avatar_url=target_user_dict.get('profile_picture_url'),
-                # Use the server IDs collected from the specific rating history
-                associatedServerIds=list(associated_server_ids_for_this_target) 
+                associatedServerIds=associated_server_ids_for_target # Populate with IDs from credit_entry
             )
         else:
-            # If target user isn't in DB yet (e.g., only rated via plugin, never logged in)
-            # try fetching basic info via ensure_user_in_db to at least get a username
-            # ensure_user_in_db itself doesn't populate associatedServerIds in this context
             fetched_dict = await ensure_user_in_db(target_id)
             if fetched_dict:
-                 profile = DiscordUserProfile(
+                 profile_data = DiscordUserProfile(
                     id=fetched_dict['user_id'],
                     username=fetched_dict['username'],
                     discriminator="0000", # Placeholder
                     avatar_url=fetched_dict.get('profile_picture_url'),
-                    associatedServerIds=list(associated_server_ids_for_this_target)
+                    associatedServerIds=associated_server_ids_for_target # Populate with IDs from credit_entry
                 )
-            else: # Fallback if ensure_user_in_db also fails to find/create them
-                 profile = DiscordUserProfile(
+            else: # Fallback
+                 profile_data = DiscordUserProfile(
                     id=target_id,
                     username=f"User_{target_id[:6]}",
                     discriminator="0000",
-                    associatedServerIds=list(associated_server_ids_for_this_target)
+                    associatedServerIds=associated_server_ids_for_target # Populate with IDs from credit_entry
                  )
         
-        if profile:
-            rated_user_profiles.append(profile)
+        if profile_data:
+            rated_user_data_list.append(RatedUserProfileResponse(
+                profile=profile_data,
+                current_score=current_score
+            ))
 
-    return rated_user_profiles
+    return rated_user_data_list
 
 # --- New Endpoint for Message Fetching ---
 class DiscordMessage(BaseModel):
