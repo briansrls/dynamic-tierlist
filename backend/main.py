@@ -64,6 +64,23 @@ class SocialCreditUpdateRequest(BaseModel):
     score_delta: float
     reason: Optional[str] = None
 
+class DiscordMemberSearchResult(BaseModel):
+    id: str
+    username: str
+    discriminator: str # e.g., "0001" or the new username system without it
+    avatar_url: Optional[str] = None
+    # Add other fields like nickname if needed
+
+class DiscordUserProfile(BaseModel):
+    id: str
+    username: str
+    discriminator: str
+    avatar: Optional[str] = None # This is the avatar hash
+    avatar_url: Optional[str] = None # We will construct this
+    banner: Optional[str] = None # Banner hash
+    accent_color: Optional[int] = None
+    public_flags: Optional[int] = None
+
 # --- In-Memory Database ---
 # For now, we'll use dictionaries to simulate MongoDB collections.
 # In a real application, these would be replaced with MongoDB operations.
@@ -375,6 +392,112 @@ async def get_social_credit_given_to_target(user_id: str, target_user_id: str):
         if entry.target_user_id == target_user_id:
             return entry
     raise HTTPException(status_code=404, detail=f"No credit history found from user {user_id} to {target_user_id}")
+
+# --- Discord Integration Endpoints (Simulated) ---
+
+@app.get("/discord/servers/{server_id}/members/search", response_model=List[DiscordMemberSearchResult])
+async def search_discord_server_members(
+    server_id: str,
+    query: str,
+    current_user: User = Depends(get_current_user) # Ensure user is authenticated
+):
+    """
+    Simulates searching for members in a Discord server.
+    In a real application, this would call the Discord API.
+    """
+    print(f"User {current_user.user_id} searching in server {server_id} for query: '{query}'")
+
+    # Check if the server exists in our mock DB (optional, but good practice)
+    if server_id not in db_servers:
+        raise HTTPException(status_code=404, detail=f"Server {server_id} not found in mock database.")
+
+    # Mock data - simulate finding users in that server
+    # In a real scenario, you'd fetch all members of db_servers[server_id]
+    # and then filter them by the query.
+    
+    # For simplicity, let's assume we have a few global mock users we can filter
+    # These users might or might not be in the db_users or the specific server's user_ids list for this simulation.
+    # This is a very simplified mock.
+    mock_discord_users = [
+        DiscordMemberSearchResult(id="discord_user_1", username="SearchUserAlice", discriminator="1111", avatar_url="https://cdn.discordapp.com/embed/avatars/0.png"),
+        DiscordMemberSearchResult(id="discord_user_2", username="SearchUserBob", discriminator="2222", avatar_url="https://cdn.discordapp.com/embed/avatars/1.png"),
+        DiscordMemberSearchResult(id="discord_user_3", username="TestUserCharlie", discriminator="3333", avatar_url="https://cdn.discordapp.com/embed/avatars/2.png"),
+        DiscordMemberSearchResult(id="discord_user_4", username="AnotherBob", discriminator="4444", avatar_url=None),
+    ]
+
+    results = [
+        member for member in mock_discord_users 
+        if query.lower() in member.username.lower()
+    ]
+    
+    # Further refinement: Check if these users are part of the server_id based on db_servers and db_users
+    # For now, we just return any match from the global mock list.
+    # A more realistic mock would involve:
+    # 1. Getting user_ids from db_servers[server_id].user_ids
+    # 2. For each user_id, getting the User object from db_users.
+    # 3. Checking if the query matches their username.
+    # 4. Formatting them into DiscordMemberSearchResult.
+    # This is complex for a quick mock, so the current approach is a placeholder.
+
+    return results
+
+@app.get("/discord/users/{user_id_to_lookup}", response_model=DiscordUserProfile)
+async def get_discord_user_profile(
+    user_id_to_lookup: str,
+    current_user: User = Depends(get_current_user) # To ensure the endpoint is used by authenticated app users
+):
+    """
+    Fetches a Discord user's public profile by their ID using the application's bot token.
+    """
+    if not settings.DISCORD_BOT_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Application bot token is not configured on the server."
+        )
+
+    discord_api_url = f"https://discord.com/api/v10/users/{user_id_to_lookup}"
+    headers = {
+        "Authorization": f"Bot {settings.DISCORD_BOT_TOKEN}"
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(discord_api_url, headers=headers)
+            response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+            
+            user_data = response.json()
+            
+            avatar_hash = user_data.get("avatar")
+            user_id = user_data.get("id")
+            avatar_full_url = None
+            if avatar_hash and user_id:
+                # Construct avatar URL (e.g., https://cdn.discordapp.com/avatars/USER_ID/AVATAR_HASH.png)
+                # Check if animated (starts with a_) for .gif, otherwise .png
+                extension = "gif" if avatar_hash.startswith("a_") else "png"
+                avatar_full_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.{extension}?size=128"
+            
+            return DiscordUserProfile(
+                id=user_data.get("id", "Unknown ID"),
+                username=user_data.get("username", "Unknown User"),
+                discriminator=user_data.get("discriminator", "0000"),
+                avatar=avatar_hash,
+                avatar_url=avatar_full_url,
+                banner=user_data.get("banner"),
+                accent_color=user_data.get("accent_color"),
+                public_flags=user_data.get("public_flags")
+            )
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Discord user with ID '{user_id_to_lookup}' not found.")
+            else:
+                # Log the error details from Discord if possible
+                error_detail = e.response.json() if e.response else str(e)
+                print(f"Discord API Error fetching user {user_id_to_lookup}: {error_detail}") # Log to server console
+                raise HTTPException(status_code=e.response.status_code, detail=f"Error communicating with Discord: {str(error_detail)}")
+        except Exception as e:
+            print(f"Generic error fetching user {user_id_to_lookup}: {e}") # Log to server console
+            raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
 # Placeholder for future database connection and models
 # from pymongo import MongoClient

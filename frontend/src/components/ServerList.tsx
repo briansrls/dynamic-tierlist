@@ -12,8 +12,8 @@ interface ServerListProps {
   servers: ServerData[];
   isLoading: boolean;
   error: string | null;
-  // We might also pass down selectedServerId and setSelectedServerId if App.tsx manages that too
-  // For now, ServerList will keep its own selectedServerId state
+  selectedServerId: string | null; // Added selectedServerId prop
+  onSelectServer: (id: string) => void; // Added onSelectServer handler prop
 }
 
 // Helper to construct Discord icon URL
@@ -64,9 +64,9 @@ const getServerInitials = (name: string): string => {
   return initials;
 };
 
-const ServerList: React.FC<ServerListProps> = ({ servers, isLoading, error }) => {
-  // Selected server state remains local to this component for now
-  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+const ServerList: React.FC<ServerListProps> = ({ servers, isLoading, error, selectedServerId, onSelectServer }) => {
+  // Selected server state is now managed by App.tsx, so local state [selectedServerId, setSelectedServerId] is removed.
+  // const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
 
   // Removed the useEffect for fetching data, as it's now passed via props
 
@@ -90,7 +90,7 @@ const ServerList: React.FC<ServerListProps> = ({ servers, isLoading, error }) =>
         <div
           key={server.id}
           className={`server-icon ${selectedServerId === server.id ? 'selected' : ''}`}
-          onClick={() => setSelectedServerId(server.id)}
+          onClick={() => onSelectServer(server.id)} // Use onSelectServer handler
           title={server.name} // Re-added title for usability, can be removed if strictly no tooltips
         >
           <div className="server-icon-image-wrapper">

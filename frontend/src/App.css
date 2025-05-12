@@ -4,6 +4,35 @@
   height: 100vh;
   background-color: #36393f; /* Discord-like dark theme background */
   color: #dcddde; /* Light text color for dark theme */
+  opacity: 0; /* Start at 0 opacity, .app-loaded will fade it in */
+}
+
+@keyframes fadeInApp {
+  to {
+    opacity: 1;
+  }
+}
+
+/* Fade out animation for logout */
+@keyframes fadeOutApp {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.App.app-loaded {
+  /* This class is primarily a marker, the animation is applied directly to .App for simplicity */
+  /* If more complex state-based animations were needed, this class would be more crucial */
+  animation: fadeInApp 0.5s ease-out forwards; /* Apply fade-in when loaded */
+  animation-delay: 0.1s;
+}
+
+.App.app-fading-out {
+  animation: fadeOutApp 0.5s ease-out forwards; /* Apply fade-out when logging out */
+  /* pointer-events: none; */ /* Optional: disable interactions during fade-out */
 }
 
 .App-logo {
@@ -356,4 +385,221 @@
 @keyframes spin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
+}
+
+/* --- UserSearch Component Styles --- */
+.user-search-container {
+  margin-bottom: 20px;
+  padding: 15px;
+  background-color: #2f3136; /* Slightly lighter than main content for definition */
+  border-radius: 8px;
+}
+
+.user-search-input {
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 15px;
+  background-color: #202225; /* Darker input background */
+  color: #dcddde; /* Light text */
+  border: 1px solid #18191c; /* Subtle border */
+  border-radius: 4px;
+  font-size: 16px;
+  box-sizing: border-box; /* Include padding and border in element's total width and height */
+}
+
+.user-search-input::placeholder {
+  color: #72767d; /* Lighter placeholder text */
+}
+
+.user-search-loading,
+.user-search-error,
+.user-search-no-results {
+  padding: 10px;
+  margin-bottom: 10px;
+  border-radius: 4px;
+  color: #dcddde;
+}
+
+.user-search-loading {
+  background-color: #3a3e44;
+}
+
+.user-search-error {
+  background-color: #d9534f; /* Bootstrap's danger color, good for errors */
+  color: #fff;
+}
+
+.user-search-no-results {
+  background-color: #4f545c; /* Neutral, slightly informative background */
+}
+
+.user-search-results-list {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+.user-search-result-item {
+  display: flex;
+  align-items: center;
+  padding: 10px;
+  margin-bottom: 8px;
+  background-color: #36393f; /* Same as main content background */
+  border-radius: 4px;
+  transition: background-color 0.2s ease-in-out;
+}
+
+.user-search-result-item:hover {
+  background-color: #3e4248;
+}
+
+.user-search-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  margin-right: 12px;
+  object-fit: cover;
+}
+
+.user-search-username {
+  flex-grow: 1;
+  color: #fff; /* White username for emphasis */
+  font-weight: 500;
+}
+
+.user-search-result-item button {
+  padding: 6px 12px;
+  background-color: #7289da; /* Discord blurple */
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.2s ease-in-out;
+}
+
+.user-search-result-item button:hover {
+  background-color: #5f73bc; /* Darker blurple on hover */
+}
+
+/* --- Tracked Users Component Styles --- */
+.tracked-users-container {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #2f3136; /* Consistent with search container */
+  border-radius: 8px;
+}
+
+.tracked-users-container h3 {
+  margin-top: 0;
+  color: #fff;
+  border-bottom: 1px solid #4f545c;
+  padding-bottom: 10px;
+  margin-bottom: 15px;
+}
+
+.tracked-users-list {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+.tracked-user-item {
+  display: flex;
+  align-items: center;
+  padding: 10px;
+  margin-bottom: 8px;
+  background-color: #36393f; /* Consistent with search items */
+  border-radius: 4px;
+}
+
+.tracked-user-avatar {
+  width: 32px; /* Slightly smaller for a list item */
+  height: 32px;
+  border-radius: 50%;
+  margin-right: 10px;
+  object-fit: cover;
+}
+
+.tracked-user-username {
+  flex-grow: 1;
+  color: #dcddde; /* Standard text color */
+  font-size: 15px;
+}
+
+.add-rating-button {
+  padding: 5px 10px;
+  background-color: #43b581; /* Discord green */
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background-color 0.2s ease-in-out;
+}
+
+.add-rating-button:hover {
+  background-color: #3aa070; /* Darker green */
+}
+
+/* --- Login Screen Styles --- */
+.login-screen-container {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  background-color: #36393f; /* Discord dark background */
+  color: #dcddde;
+  text-align: center;
+  padding: 20px;
+}
+
+.login-prompt h2 {
+  font-size: 2.5em;
+  margin-bottom: 0.5em;
+  color: #fff;
+}
+
+.login-prompt p {
+  font-size: 1.2em;
+  margin-bottom: 1.5em;
+  color: #b9bbbe; /* Lighter grey for subtitle */
+}
+
+.login-icon-button.large {
+  width: 100px; /* Larger button */
+  height: 100px;
+  border-radius: 50%;
+  background-color: #5865F2; /* Discord Blurple */
+  border: none; /* Remove border for a flatter look */
+  box-shadow: 0 4px 15px rgba(0,0,0,0.2); /* Softer shadow */
+  transition: transform 0.2s ease-out, background-color 0.2s ease-out; /* Smooth transitions */
+}
+
+.login-icon-button.large svg {
+  width: 48px; /* Icon size relative to button */
+  height: 48px;
+  fill: #FFFFFF; /* White icon */
+}
+
+.login-icon-button.large:hover {
+  background-color: #4f5bda; /* Slightly darker Blurple */
+  transform: scale(1.1); /* Enlarge on hover */
+}
+
+/* --- Pure CSS Spinner --- */
+.css-spinner {
+  width: 50px;
+  height: 50px;
+  border: 5px solid #4f545c; /* Lighter grey for the track */
+  border-top-color: #7289da; /* Blurple for the spinning part */
+  border-radius: 50%;
+  animation: cssSpin 1s linear infinite;
+}
+
+@keyframes cssSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
