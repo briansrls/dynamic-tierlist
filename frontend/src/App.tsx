@@ -45,6 +45,14 @@ const MainLayout: React.FC = () => {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
 
+  // --- State and Refs for Login Button Animation --- 
+  const [mousePosition, setMousePosition] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const [buttonStyle, setButtonStyle] = useState({ x: 50, y: 50, boxShadow: '' }); // Added boxShadow
+  const mousePositionRef = useRef(mousePosition);
+  const currentButtonPosRef = useRef({ x: 50, y: 50 });
+  const animationFrameIdRef = useRef<number | null>(null);
+  // --- End State and Refs for Login Button Animation ---
+
   // --- Ref for auto-disarm timer --- ADD THIS
   const logoutArmedTimerRef = useRef<NodeJS.Timeout | null>(null);
   const logoutTransitionTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -270,6 +278,110 @@ const MainLayout: React.FC = () => {
     }
   }, [currentUser?.user_id, fetchRatedUsersData]);
 
+  // --- Effect for Login Button Floating Animation ---
+  useEffect(() => {
+    if (!currentUser) { // Only run when login screen is visible
+      const handleMouseMove = (event: MouseEvent) => {
+        // Update state to potentially trigger other effects if needed in future, 
+        // but use ref for direct animation access
+        setMousePosition({ x: event.clientX, y: event.clientY });
+      };
+      window.addEventListener('mousemove', handleMouseMove);
+
+      // Reset button position and style when login screen appears
+      currentButtonPosRef.current = { x: 50, y: 50 };
+      setButtonStyle({ x: 50, y: 50, boxShadow: '' }); // Reset style
+
+      const animateButton = () => {
+        // Always get the latest mouse position via ref
+        const targetXPercent = (mousePositionRef.current.x / window.innerWidth) * 100;
+        const targetYPercent = (mousePositionRef.current.y / window.innerHeight) * 100;
+        const easingFactor = 0.001; // Adjust for desired floatiness (0.01 = slow, 0.1 = fast)
+
+        currentButtonPosRef.current.x += (targetXPercent - currentButtonPosRef.current.x) * easingFactor;
+        currentButtonPosRef.current.y += (targetYPercent - currentButtonPosRef.current.y) * easingFactor;
+
+        // --- Calculate dynamic box-shadow based on proximity and pulse ---
+        const maxDist = 50; // Max distance (percentage units) for full effect scaling
+        const minDist = 5;  // Min distance for max brightness
+        const minBrightness = 0.5; // Brightness multiplier at max distance
+        const maxBrightness = 3.5; // Brightness multiplier at min distance
+        const pulsePeriod = 3; // Pulse cycle duration in seconds
+        const pulseAmplitude = 0.15; // How much the brightness pulses (e.g., 0.15 means +/- 15%)
+
+        const dx = targetXPercent - currentButtonPosRef.current.x;
+        const dy = targetYPercent - currentButtonPosRef.current.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        // Calculate distance-based brightness (inversely proportional)
+        const normalizedDistance = Math.max(0, Math.min(1, (distance - minDist) / (maxDist - minDist)));
+        const distanceBrightness = maxBrightness - normalizedDistance * (maxBrightness - minBrightness);
+
+        // Calculate pulse factor
+        const pulseTime = performance.now() / 1000;
+        const pulseFactor = 1.0 + Math.sin(pulseTime * Math.PI * 2 / pulsePeriod) * pulseAmplitude;
+
+        // Combine factors
+        const finalBrightness = distanceBrightness * pulseFactor;
+
+        // Generate box-shadow string (based on radiateLight 50% keyframe)
+        const baseBlur1 = 10, baseSpread1 = 20, baseAlpha1 = 0.2;
+        const baseBlur2 = 20, baseSpread2 = 35, baseAlpha2 = 0.15;
+        const baseBlur3 = 30, baseSpread3 = 50, baseAlpha3 = 0.1;
+
+        const blur1 = baseBlur1 * finalBrightness;
+        const spread1 = baseSpread1 * finalBrightness;
+        const alpha1 = Math.min(0.7, baseAlpha1 * finalBrightness);
+
+        const blur2 = baseBlur2 * finalBrightness;
+        const spread2 = baseSpread2 * finalBrightness;
+        const alpha2 = Math.min(0.5, baseAlpha2 * finalBrightness);
+
+        const blur3 = baseBlur3 * finalBrightness;
+        const spread3 = baseSpread3 * finalBrightness;
+        const alpha3 = Math.min(0.4, baseAlpha3 * finalBrightness);
+
+        const newBoxShadow =
+          `0 0 ${blur1}px ${spread1}px rgba(88, 101, 242, ${alpha1}), ` +
+          `0 0 ${blur2}px ${spread2}px rgba(88, 101, 242, ${alpha2}), ` +
+          `0 0 ${blur3}px ${spread3}px rgba(88, 101, 242, ${alpha3})`;
+        // --- End dynamic box-shadow calculation ---
+
+        // Update the state that triggers the visual re-render
+        setButtonStyle({
+          x: currentButtonPosRef.current.x,
+          y: currentButtonPosRef.current.y,
+          boxShadow: newBoxShadow // Update boxShadow
+        });
+
+        animationFrameIdRef.current = requestAnimationFrame(animateButton);
+      };
+
+      animationFrameIdRef.current = requestAnimationFrame(animateButton);
+
+      // Cleanup function for when the component unmounts or currentUser changes
+      return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        if (animationFrameIdRef.current) {
+          cancelAnimationFrame(animationFrameIdRef.current);
+          animationFrameIdRef.current = null;
+        }
+      };
+    } else {
+      // Ensure animation stops if user logs in while it might be running
+      if (animationFrameIdRef.current) {
+        cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
+      }
+    }
+  }, [currentUser]); // Re-run this effect only when login status changes
+
+  // Effect to keep the mousePositionRef updated
+  useEffect(() => {
+    mousePositionRef.current = mousePosition;
+  }, [mousePosition]);
+  // --- End Effect for Login Button Floating Animation ---
+
   const handleLogin = () => {
     window.location.href = 'http://localhost:8000/auth/discord/login';
   };
@@ -362,8 +474,19 @@ const MainLayout: React.FC = () => {
   if (!currentUser) { // isLoadingAuth is false, minimumLoadTimePassed is true
     return (
       <div className="login-screen-container">
-        <div onClick={handleLogin} className="login-icon-button large"> {/* Added 'large' class for styling */}
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="48px" height="48px"> {/* Increased size */}
+        <div
+          onClick={handleLogin}
+          className="login-icon-button large" // Class provides base style
+          style={{
+            position: 'absolute',
+            top: `${buttonStyle.y}%`,
+            left: `${buttonStyle.x}%`,
+            transform: 'translate(-50%, -50%)', // Center element on its coords
+            boxShadow: buttonStyle.boxShadow, // Apply dynamic box-shadow
+            // Hover scale effect comes from CSS transition on transform
+          }}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="48px" height="48px">
             <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
           </svg>
         </div>
