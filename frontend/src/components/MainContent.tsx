@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import UserSearch, { UserProfile } from './UserSearch';
 import { AppUser, ServerData, GLOBAL_VIEW_SERVER_ID } from '../App';
 import AddRatingModal from './AddRatingModal';
@@ -9,6 +9,12 @@ import ConfirmationModal from './ConfirmationModal';
 interface RatedUserProfileResponse {
   profile: UserProfile; // Re-uses the existing UserProfile interface
   current_score: number;
+}
+
+// Define the type for users with tiers, used internally
+type Tier = 'S' | 'A' | 'B' | 'C' | 'D';
+interface UserWithTier extends RatedUserProfileResponse {
+  tier: Tier;
 }
 
 interface MainContentProps {
@@ -30,38 +36,94 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
   const [isUntrackConfirmModalOpen, setIsUntrackConfirmModalOpen] = useState(false);
   const [userToUntrack, setUserToUntrack] = useState<UserProfile | null>(null);
 
-  // --- REMOVE State and Ref for Mouse Interaction ---
-  // const [mousePosition, setMousePosition] = useState<{ x: number; y: number } | null>(null);
-  // const waterTankRef = useRef<HTMLDivElement>(null); 
-  // --- END REMOVE State and Ref ---
+  // State for tracking tier changes and animations
+  const [animatingUserIds, setAnimatingUserIds] = useState<Set<string>>(new Set());
+  const [ratingUpdateCount, setRatingUpdateCount] = useState<number>(0); // New state for global animation trigger
 
-  // --- REMOVE State for Item Positions ---
-  // const [itemPositions, setItemPositions] = useState<Record<string, { top: number; left: number; zIndex: number }>>({});
-  // --- END REMOVE State for Item Positions ---
-
-  // --- displayedRatedUsers memo MUST be defined before useEffect that uses it ---
-  const displayedRatedUsers = React.useMemo(() => {
+  // --- displayedRatedUsers memo now includes tier calculation ---
+  const displayedRatedUsers = useMemo<UserWithTier[]>(() => {
     let usersToDisplay = ratedUsersData;
     if (selectedServerId && selectedServerId !== globalViewServerId) {
       usersToDisplay = ratedUsersData.filter(ratedUser =>
         ratedUser.profile.associatedServerIds?.includes(selectedServerId)
       );
     }
-    return [...usersToDisplay].sort((a, b) => b.current_score - a.current_score);
+
+    // Sort by original score
+    const sortedUsers = [...usersToDisplay].sort((a, b) => b.current_score - a.current_score);
+
+    if (sortedUsers.length === 0) {
+      return [];
+    }
+
+    // REMOVE Mean/StdDev calculations
+    // const scores = sortedUsers.map(u => u.current_score);
+    // const meanScore = ...;
+    // let stdDevScore = ...;
+    // console.log(`[TierCalc] For displayed users: Mean = ...`);
+
+    // --- Logarithmic Tier Calculation --- ADD THIS BLOCK
+    const signedLog10 = (score: number): number => {
+      if (score === 0) return 0;
+      return Math.sign(score) * Math.log10(Math.abs(score) + 1);
+    };
+
+    const calculateTier = (score: number): Tier => {
+      const logScore = signedLog10(score);
+      // Tier thresholds based on logScore
+      if (logScore >= 3) return 'S'; // ~ score >= 1000
+      if (logScore >= 2) return 'A'; // ~ score >= 100
+      if (logScore >= 0) return 'B'; // ~ score >= 0
+      if (logScore >= -2) return 'C'; // ~ score >= -100
+      return 'D'; // ~ score < -100
+    };
+    // --- End Logarithmic Tier Calculation ---
+
+    const usersWithTiers: UserWithTier[] = sortedUsers.map(user => {
+      const tier = calculateTier(user.current_score);
+      // Update log to show logScore
+      const logScoreVal = signedLog10(user.current_score);
+      console.log(`[TierCalc] User: ${user.profile.username}, Score: ${user.current_score}, Log10Score: ${logScoreVal.toFixed(2)}, Tier: ${tier}`);
+      return {
+        ...user,
+        tier: tier
+      };
+    });
+
+    return usersWithTiers;
+
   }, [ratedUsersData, selectedServerId, globalViewServerId]);
   // --- END displayedRatedUsers ---
 
-  // --- REMOVE useEffect for Mouse Event Listeners ---
-  // useEffect(() => { ... }, []);
-  // --- END REMOVE useEffect for Mouse ---
+  // Effect to trigger animations for all displayed users when a rating is submitted
+  useEffect(() => {
+    // Log when the effect runs and the trigger value
+    console.log(`Animation effect running. ratingUpdateCount: ${ratingUpdateCount}`);
 
-  // --- REMOVE useEffect to Initialize/Update Item Positions ---
-  // useEffect(() => { ... }, [displayedRatedUsers]);
-  // --- END REMOVE useEffect for Item Positions ---
+    // We check ratingUpdateCount > 0 because the effect runs once on mount with count 0
+    if (ratingUpdateCount > 0) {
+      const allDisplayedUserIds = new Set(displayedRatedUsers.map(u => u.profile.id));
+      if (allDisplayedUserIds.size === 0) {
+        console.log('No users displayed, skipping animation setting.');
+        return; // Don't try to animate if list is empty
+      }
+      console.log('Applying animation to user IDs:', allDisplayedUserIds);
+      setAnimatingUserIds(allDisplayedUserIds);
 
-  // --- REMOVE Animation Loop useEffect ---
-  // useEffect(() => { ... }, [mousePosition, displayedRatedUsers, itemPositions]);
-  // --- END REMOVE Animation Loop ---
+      const timer = setTimeout(() => {
+        console.log('Removing animation class (clearing set).');
+        setAnimatingUserIds(new Set()); // Clear all animations
+      }, 1000); // Animation duration (matches CSS)
+
+      return () => {
+        console.log('Clearing animation timer.');
+        clearTimeout(timer);
+      }
+    }
+    else {
+      console.log('Animation effect ran, but ratingUpdateCount is 0. No animation triggered.');
+    }
+  }, [ratingUpdateCount]); // *** REMOVED displayedRatedUsers from dependencies ***
 
   const handleTrackUser = async (userToTrack: UserProfile) => {
     if (!currentUser || !selectedServerId) return;
@@ -117,7 +179,7 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
 
     if (!token) {
       setRatingError("Authentication token not found. Please login again.");
-      setIsSubmitting(false); // Set submitting false before throwing
+      setIsSubmitting(false);
       throw new Error("Auth token not found.");
     }
 
@@ -130,7 +192,7 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
         },
         body: JSON.stringify({
           score_delta: scoreDelta,
-          reason: reason // Backend endpoint give_social_credit uses this
+          reason: reason
         }),
       });
 
@@ -143,21 +205,16 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
 
       console.log('Rating submitted successfully!', await response.json());
       closeRatingModal();
-      // Use renamed refresh prop
-      await refreshRatedUsersData();
+      setRatingUpdateCount(count => count + 1); // Increment to trigger animation effect
+      await refreshRatedUsersData(); // This refreshes data, displayedRatedUsers will update
 
     } catch (err: any) {
       console.error("Failed to submit rating:", err);
-      // Ensure error is re-thrown so AddRatingModal can catch it if needed
-      // Also ensure submitting state is reset
       setIsSubmitting(false);
       throw err;
-    } finally {
-      // This might run too early if error is thrown above
-      // Better to set isSubmitting false in catch and after success
-      // setIsSubmitting(false); // Removed from here
     }
-    setIsSubmitting(false); // Set false after successful try block
+    // Removed finally block here, isSubmitting is set after catch or successful try
+    setIsSubmitting(false);
   };
 
   const handleOpenUntrackConfirmModal = (targetUser: UserProfile) => {
@@ -220,26 +277,32 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
 
   return (
     <div className="main-content-container">
-      {/* REMOVE waterTankRef from this div */}
       <div className="tracked-users-container">
-        <h3>Tier List</h3> {/* Changed from Buoyancy List */}
-        {ratedUsersData.length === 0 ? (
+        <h3>Tier List</h3>
+        {displayedRatedUsers.length === 0 ? (
           <p style={{ textAlign: 'center', color: '#8e9297' }}>No users being tracked yet.</p>
         ) : (
-          // Change back to ul and li for a standard list
           <ul className="tracked-users-list">
-            {displayedRatedUsers.map((ratedUser, index) => {
+            {displayedRatedUsers.map((ratedUser) => {
               const user = ratedUser.profile;
-              // REMOVE buoyancyStyle calculation and application
-              // const currentPosition = itemPositions[user.id] || { top: 50, left: 50, zIndex: 50 }; 
+              const isAnimating = animatingUserIds.has(user.id);
+              // Log the animation status during render
+              console.log(`Rendering user ${user.id} (${user.username}), isAnimating: ${isAnimating}`);
 
               const displayedServerIcons = (user.associatedServerIds || [])
                 .map(serverId => userServers.find(s => s.id === serverId))
                 .filter(server => !!server) as ServerData[];
 
               return (
-                // Use li, remove inline style for positioning
-                <li key={user.id} className="tracked-user-item">
+                <li key={user.id} className={`tracked-user-item`}>
+                  <span className={[
+                    'tier-badge',
+                    `tier-${ratedUser.tier.toLowerCase()}`,
+                    isAnimating ? 'tier-glitch' : ''
+                  ].filter(Boolean).join(' ')}
+                    style={{ marginRight: '8px', fontWeight: 'bold', minWidth: '18px', textAlign: 'center' }}>
+                    {ratedUser.tier}
+                  </span>
                   <img
                     src={user.avatar_url || 'https://cdn.discordapp.com/embed/avatars/0.png'}
                     alt={`${user.username}'s avatar`}
@@ -259,12 +322,11 @@ const MainContent: React.FC<MainContentProps> = ({ selectedServerId, currentUser
                     ))}
                   </div>
 
-                  {/* Wrapper for score and actions, with marginLeft:auto for right alignment */}
                   <div style={{ display: 'flex', alignItems: 'center', marginLeft: 'auto' }}>
                     <span style={{ marginRight: '15px', fontWeight: 'bold', fontSize: '0.9em' }}>
                       {ratedUser.current_score.toFixed(1)}
                     </span>
-                    <div className="tracked-user-actions" style={{ marginTop: '0px' }}> {/* Reset marginTop if needed */}
+                    <div className="tracked-user-actions" style={{ marginTop: '0px' }}>
                       <button onClick={() => openRatingModal(user)} className="add-rating-button" disabled={isSubmitting} style={{ padding: '3px 6px', fontSize: '0.8em' }}>Rate</button>
                       <button onClick={() => handleOpenUntrackConfirmModal(user)} className="untrack-user-button icon-button" disabled={isSubmitting} title={`Stop tracking ${user.username}`} style={{ padding: '3px' }}>
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width="12px" height="12px"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" /></svg>

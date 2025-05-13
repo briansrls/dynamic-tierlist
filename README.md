@@ -23,6 +23,11 @@ This project aims to create a system for tracking "social credit" scores between
 
 To get the application running locally, you'll need to start both the backend server and the frontend development server.
 
+**Important:** Make sure you have MongoDB installed and running before starting the backend. You can typically start it with a command like:
+```
+docker start mongo-dev
+```
+
 ### Backend (FastAPI)
 
 1.  **Navigate to the backend directory:**

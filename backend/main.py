@@ -4,7 +4,7 @@ from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware # Import CORS middleware
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime, timezone
 from fastapi import Path
 import secrets # For generating secure tokens
@@ -138,7 +138,6 @@ class PluginApiKeyResponse(BaseModel):
 class RatedUserProfileResponse(BaseModel):
     profile: DiscordUserProfile
     current_score: float
-# --- End New Response Model --- 
 
 # --- In-Memory Database ---
 # For now, we'll use dictionaries to simulate MongoDB collections.
